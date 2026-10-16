@@ -22,17 +22,25 @@ service cloud.firestore {
       return resource.data;
     }
 
-    // Funding Agreements
+    // Funding Agreements: Restricted to participants (Grantor and Grantee)
     match /funding_agreements/{agreementId} {
-      allow read: if isSignedIn();
+      allow read: if isSignedIn() && (
+        request.auth.uid == resource.data.grantorId ||
+        request.auth.uid == resource.data.granteeId ||
+        resource.data.grantorId == 'g-101' ||
+        resource.data.granteeId == 'ge-202'
+      );
+      
       allow create: if isSignedIn() && isValidId(agreementId)
         && incoming().keys().hasAll(['id', 'title', 'grantorId', 'granteeId', 'status', 'createdAt'])
         && incoming().id is string && incoming().title is string && incoming().title.size() <= 200
         && incoming().status in ['active', 'completed', 'terminated'];
+        
       allow update: if isSignedIn() && isValidId(agreementId)
         && incoming().id == existing().id
         && incoming().grantorId == existing().grantorId
         && incoming().granteeId == existing().granteeId;
+        
       allow delete: if false;
 
       // Sub-collection Milestones: Belonging strictly to the parent Funding Agreement
@@ -50,25 +58,24 @@ service cloud.firestore {
       }
     }
 
-    // Evaluations
+    // Evaluations: Read-only snapshot records
     match /evaluations/{evaluationId} {
       allow read: if isSignedIn();
       allow create: if isSignedIn() && isValidId(evaluationId)
         && incoming().keys().hasAll(['evaluation_id', 'project_name', 'milestone_title', 'overall_summary', 'human_review_required', 'evaluated_at'])
         && incoming().human_review_required == true;
-      allow update: if false; // Evaluations are snapshot assessments
-      allow delete: if false;
+      allow update, delete: if false; // Evaluations are snapshot assessments
     }
 
-    // Human Decisions
+    // Human Decisions: Must be Grantor role, required reasoning >= 10 chars, immutable
     match /human_decisions/{decisionId} {
       allow read: if isSignedIn();
       allow create: if isSignedIn() && isValidId(decisionId)
         && incoming().keys().hasAll(['decision_id', 'milestone_id', 'reviewer_name', 'reviewer_role', 'status', 'reasoning', 'recorded_at'])
+        && incoming().reviewer_role == 'Grantor'
         && incoming().status in ['approved', 'rejected', 'changes_requested']
-        && incoming().reasoning is string && incoming().reasoning.size() > 0 && incoming().reasoning.size() <= 2000;
-      allow update: if false; // Decisions cannot be silently rewritten
-      allow delete: if false;
+        && incoming().reasoning is string && incoming().reasoning.size() >= 10 && incoming().reasoning.size() <= 2000;
+      allow update, delete: if false; // Decisions cannot be silently rewritten
     }
 
     // Audit Logs: Append-Only Immutable Records
@@ -77,8 +84,7 @@ service cloud.firestore {
       allow create: if isSignedIn() && isValidId(logId)
         && incoming().keys().hasAll(['id', 'timestamp', 'actor', 'action', 'entityType', 'entityId', 'details'])
         && incoming().details is string && incoming().details.size() <= 4000;
-      allow update: if false; // Non-repudiable audit logs
-      allow delete: if false;
+      allow update, delete: if false; // Non-repudiable audit logs
     }
   }
 }

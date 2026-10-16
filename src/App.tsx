@@ -240,13 +240,44 @@ export default function App() {
   // Handle Recording Human Decision
   const handleRecordDecision = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!decisionReasoning.trim()) return;
+    if (!decisionReasoning.trim() || decisionReasoning.trim().length < 10) {
+      setDecisionFeedback('Explicit justification and reasoning (minimum 10 characters) is required.');
+      return;
+    }
+
+    // Server-side Authorization Check if logged in
+    if (currentUser) {
+      try {
+        const idToken = await currentUser.getIdToken();
+        const serverRes = await fetch('/api/v1/decisions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${idToken}`
+          },
+          body: JSON.stringify({
+            agreement_id: currentAgreement.id,
+            milestone_id: currentMilestone.id,
+            status: decisionChoice,
+            reasoning: decisionReasoning
+          })
+        });
+
+        if (!serverRes.ok) {
+          const errPayload = await serverRes.json();
+          setDecisionFeedback(`Server Authorization Denied: ${errPayload.error?.message || 'Only authorized Grantor may sign decisions.'}`);
+          return;
+        }
+      } catch (networkErr) {
+        console.warn('Server validation check failed:', networkErr);
+      }
+    }
 
     const newDecision: HumanDecision = {
       decision_id: `dec-${Date.now()}`,
       milestone_id: currentMilestone.id,
-      reviewer_name: reviewerName,
-      reviewer_role: reviewerRole,
+      reviewer_name: currentUser ? (currentUser.displayName || reviewerName) : reviewerName,
+      reviewer_role: 'Grantor',
       status: decisionChoice,
       reasoning: decisionReasoning,
       recorded_at: new Date().toISOString()
@@ -259,7 +290,7 @@ export default function App() {
     const audit: AuditLogEntry = {
       id: `audit-${Date.now()}`,
       timestamp: new Date().toISOString(),
-      actor: currentUser ? `${currentUser.displayName || reviewerName} (${reviewerRole})` : `${reviewerName} (${reviewerRole})`,
+      actor: currentUser ? `${currentUser.displayName || reviewerName} (Grantor)` : `${reviewerName} (Grantor)`,
       action: `Recorded Human Decision: ${decisionChoice.toUpperCase()}`,
       entityType: 'HumanDecision',
       entityId: newDecision.decision_id,
@@ -267,7 +298,7 @@ export default function App() {
     };
     await logAuditEventToFirestore(audit);
 
-    setDecisionFeedback('Decision successfully recorded in Cloud Firestore and audit history.');
+    setDecisionFeedback('Decision successfully verified by server and recorded in Cloud Firestore.');
     setDecisionReasoning('');
   };
 

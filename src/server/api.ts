@@ -1,6 +1,10 @@
 import type { IncomingMessage, ServerResponse } from 'http';
+import { verifyFirebaseIdToken, checkAgreementAuthorization } from './auth';
+import { HumanDecision } from '../types';
+import { initialFundingAgreements } from '../data/mockData';
 
 export interface EvaluationRequest {
+  agreement_id?: string;
   project_name: string;
   repository_url: string;
   milestone: {
@@ -11,9 +15,11 @@ export interface EvaluationRequest {
   evidence_source: 'github' | 'sample';
 }
 
-export interface ApiErrorDetail {
-  code: string;
-  message: string;
+export interface DecisionRequest {
+  agreement_id: string;
+  milestone_id: string;
+  status: 'approved' | 'rejected' | 'changes_requested';
+  reasoning: string;
 }
 
 export interface ValidationErrorResult {
@@ -86,16 +92,161 @@ export function validateEvaluationRequest(body: any): ValidationErrorResult {
   return { valid: true };
 }
 
-export function handleApiRequest(req: IncomingMessage, res: ServerResponse, url: URL, rawBody: string) {
+export function validateDecisionRequest(body: any): ValidationErrorResult {
+  if (!body || typeof body !== 'object') {
+    return {
+      valid: false,
+      error: { code: 'INVALID_REQUEST', message: 'Request body must be a JSON object.' }
+    };
+  }
+
+  if (!body.agreement_id || typeof body.agreement_id !== 'string') {
+    return {
+      valid: false,
+      error: { code: 'INVALID_REQUEST', message: 'agreement_id is required.' }
+    };
+  }
+
+  if (!body.milestone_id || typeof body.milestone_id !== 'string') {
+    return {
+      valid: false,
+      error: { code: 'INVALID_REQUEST', message: 'milestone_id is required.' }
+    };
+  }
+
+  if (!['approved', 'rejected', 'changes_requested'].includes(body.status)) {
+    return {
+      valid: false,
+      error: { code: 'INVALID_REQUEST', message: 'status must be "approved", "rejected", or "changes_requested".' }
+    };
+  }
+
+  if (!body.reasoning || typeof body.reasoning !== 'string' || body.reasoning.trim().length < 10) {
+    return {
+      valid: false,
+      error: { code: 'INVALID_REQUEST', message: 'Explicit justification and reasoning (minimum 10 characters) is required.' }
+    };
+  }
+
+  return { valid: true };
+}
+
+export function handleApiRequest(req: IncomingMessage, res: ServerResponse, url: URL, rawBody: string): boolean {
   res.setHeader('Content-Type', 'application/json');
 
+  // Public Healthcheck
   if (url.pathname === '/api/v1/health' && req.method === 'GET') {
     res.statusCode = 200;
     res.end(JSON.stringify({ status: 'ok', timestamp: new Date().toISOString(), persistence: 'firestore' }));
     return true;
   }
 
+  // Protected: Agreement Retrieval
+  if (url.pathname.startsWith('/api/v1/agreements/') && req.method === 'GET') {
+    const agreementId = url.pathname.replace('/api/v1/agreements/', '').trim();
+    const authHeader = req.headers['authorization'];
+    const authResult = verifyFirebaseIdToken(authHeader);
+
+    if (!authResult.valid || !authResult.user) {
+      res.statusCode = 401;
+      res.end(JSON.stringify({ error: authResult.error }));
+      return true;
+    }
+
+    const agreement = initialFundingAgreements.find(a => a.id === agreementId);
+    if (!agreement) {
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: { code: 'AGREEMENT_NOT_FOUND', message: `Agreement ${agreementId} not found.` } }));
+      return true;
+    }
+
+    const access = checkAgreementAuthorization(authResult.user, agreement);
+    if (!access.authorized) {
+      res.statusCode = 403;
+      res.end(JSON.stringify({ error: access.error }));
+      return true;
+    }
+
+    res.statusCode = 200;
+    res.end(JSON.stringify({ agreement, accessRole: access.role }));
+    return true;
+  }
+
+  // Protected: Human Decision Recording
+  if (url.pathname === '/api/v1/decisions' && req.method === 'POST') {
+    const authHeader = req.headers['authorization'];
+    const authResult = verifyFirebaseIdToken(authHeader);
+
+    if (!authResult.valid || !authResult.user) {
+      res.statusCode = 401;
+      res.end(JSON.stringify({ error: authResult.error }));
+      return true;
+    }
+
+    let parsed: any;
+    try {
+      parsed = JSON.parse(rawBody);
+    } catch {
+      res.statusCode = 400;
+      res.end(JSON.stringify({ error: { code: 'INVALID_REQUEST', message: 'Malformed JSON payload.' } }));
+      return true;
+    }
+
+    const valResult = validateDecisionRequest(parsed);
+    if (!valResult.valid && valResult.error) {
+      res.statusCode = 400;
+      res.end(JSON.stringify({ error: valResult.error }));
+      return true;
+    }
+
+    const agreement = initialFundingAgreements.find(a => a.id === parsed.agreement_id);
+    if (!agreement) {
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: { code: 'AGREEMENT_NOT_FOUND', message: `Agreement ${parsed.agreement_id} not found.` } }));
+      return true;
+    }
+
+    // ENFORCE GRANTOR ROLE: Only Grantor may record human decisions
+    const access = checkAgreementAuthorization(authResult.user, agreement, 'Grantor');
+    if (!access.authorized) {
+      res.statusCode = 403;
+      res.end(JSON.stringify({ error: access.error }));
+      return true;
+    }
+
+    const recordedDecision: HumanDecision = {
+      decision_id: `dec-${Date.now()}`,
+      milestone_id: parsed.milestone_id,
+      reviewer_name: authResult.user.name || authResult.user.email || 'Authorized Grantor',
+      reviewer_role: 'Grantor',
+      status: parsed.status,
+      reasoning: parsed.reasoning,
+      recorded_at: new Date().toISOString()
+    };
+
+    res.statusCode = 201;
+    res.end(JSON.stringify({
+      success: true,
+      decision: recordedDecision,
+      authorized_reviewer_uid: authResult.user.uid
+    }));
+    return true;
+  }
+
+  // Protected / Contract-Conforming: Evaluations Endpoint
   if (url.pathname === '/api/v1/evaluations' && req.method === 'POST') {
+    const authHeader = req.headers['authorization'];
+    
+    // If auth header is provided, enforce strict token verification
+    if (authHeader) {
+      const authResult = verifyFirebaseIdToken(authHeader);
+      if (!authResult.valid) {
+        res.statusCode = 401;
+        res.end(JSON.stringify({ error: authResult.error }));
+        return true;
+      }
+    }
+
     let parsed: any;
     try {
       parsed = JSON.parse(rawBody);
