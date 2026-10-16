@@ -286,7 +286,7 @@ describe('VeriCommit Evaluation API & Domain Rules', () => {
     expect(res.valid).toBe(true);
   });
 
-  it('returns 501 Not Implemented disclosing pending Gemini integration', async () => {
+  it('returns 200 and a contract-conforming EvaluationReport', async () => {
     let statusCode = 0;
     let responseBody = '';
 
@@ -302,18 +302,27 @@ describe('VeriCommit Evaluation API & Domain Rules', () => {
       project_name: 'Community Tools',
       repository_url: 'https://github.com/example/community-tools',
       milestone: {
-        title: 'Title',
-        description: 'Desc',
-        acceptance_criteria: ['Crit 1']
+        title: 'Implement member registration',
+        description: 'Deliver member registration and validation',
+        acceptance_criteria: [
+          'A user can submit the registration form.',
+          'Invalid input produces understandable validation errors.'
+        ]
       },
       evidence_source: 'sample'
     });
 
     await handleApiRequest(mockReq, mockRes, url, validBody, testKeySet);
-    expect(statusCode).toBe(501);
+    expect(statusCode).toBe(200);
     const parsed = JSON.parse(responseBody);
-    expect(parsed.error.code).toBe('EVALUATION_NOT_IMPLEMENTED');
-  });
+    expect(parsed.evaluation_id).toMatch(/^eval_/);
+    expect(parsed.human_review_required).toBe(true);
+    expect(parsed.criteria_results).toHaveLength(2);
+    expect(['supported', 'insufficient_evidence', 'uncertain']).toContain(parsed.criteria_results[0].status);
+    expect(parsed.overall_summary).toBeTruthy();
+    expect(Array.isArray(parsed.suggested_next_steps)).toBe(true);
+    expect(Array.isArray(parsed.limitations)).toBe(true);
+  }, 10000);
 });
 
 describe('Audit History & Immutability Rules', () => {

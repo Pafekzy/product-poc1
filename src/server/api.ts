@@ -3,6 +3,8 @@ import { verifyFirebaseIdToken, checkAgreementAuthorization } from './auth';
 import { HumanDecision } from '../types';
 import { initialFundingAgreements } from '../data/mockData';
 import type { JWTVerifyGetKey } from 'jose';
+import { parseGithubRepoUrl, fetchGithubEvidence } from './github';
+import { evaluateMilestone } from './evaluator';
 
 export interface EvaluationRequest {
   agreement_id?: string;
@@ -137,7 +139,8 @@ export async function handleApiRequest(
   res: ServerResponse,
   url: URL,
   rawBody: string,
-  customKeySet?: JWTVerifyGetKey
+  customKeySet?: JWTVerifyGetKey,
+  customFetchFn?: typeof fetch
 ): Promise<boolean> {
   res.setHeader('Content-Type', 'application/json');
 
@@ -283,20 +286,152 @@ export async function handleApiRequest(
       return true;
     }
 
-    // Explicitly return not-implemented rather than synthesizing AI assessment
-    res.statusCode = 501;
-    res.end(JSON.stringify({
-      error: {
-        code: 'EVALUATION_NOT_IMPLEMENTED',
-        message: 'Live AI evaluation via Gemini API is pending server-side model configuration. Synthetic evaluation results are strictly prohibited by VeriCommit evaluation rules.'
-      },
-      validation_passed: true,
-      project_name: parsed.project_name,
-      milestone_title: parsed.milestone.title,
-      criteria_count: parsed.milestone.acceptance_criteria.length,
-      evidence_source: parsed.evidence_source
-    }));
-    return true;
+    try {
+      const evaluation = await evaluateMilestone({
+        project_name: parsed.project_name,
+        repository_url: parsed.repository_url,
+        milestone: parsed.milestone,
+        evidence_source: parsed.evidence_source,
+        fetchFn: customFetchFn
+      });
+
+      res.statusCode = 200;
+      res.end(JSON.stringify(evaluation));
+      return true;
+    } catch (err: any) {
+      res.statusCode = err.status || 500;
+      res.end(JSON.stringify({
+        error: {
+          code: err.code || 'EVALUATION_FAILED',
+          message: err.message || 'Evaluation failed against provided evidence.'
+        }
+      }));
+      return true;
+    }
+  }
+
+  // Protected: GitHub Evidence Retrieval (Prompt 06)
+  if (url.pathname === '/api/v1/evidence/github' && req.method === 'GET') {
+    const authHeader = req.headers['authorization'];
+    const authResult = await verifyFirebaseIdToken(authHeader, customKeySet);
+
+    if (!authResult.valid || !authResult.user) {
+      res.statusCode = 401;
+      res.end(JSON.stringify({ error: authResult.error }));
+      return true;
+    }
+
+    const repoUrl = url.searchParams.get('repo_url');
+    if (!repoUrl) {
+      res.statusCode = 400;
+      res.end(JSON.stringify({
+        error: {
+          code: 'INVALID_REPOSITORY_URL',
+          message: 'Query parameter "repo_url" is required.'
+        }
+      }));
+      return true;
+    }
+
+    // Authorization & Context Enforcement:
+    // User must supply agreement_id establishing the authorized agreement context
+    const agreementId = url.searchParams.get('agreement_id');
+    if (!agreementId) {
+      res.statusCode = 400;
+      res.end(JSON.stringify({
+        error: {
+          code: 'AGREEMENT_CONTEXT_REQUIRED',
+          message: 'Query parameter "agreement_id" is required to establish authorized repository context.'
+        }
+      }));
+      return true;
+    }
+
+    const agreement = initialFundingAgreements.find((a) => a.id === agreementId);
+    if (!agreement) {
+      res.statusCode = 404;
+      res.end(JSON.stringify({
+        error: {
+          code: 'AGREEMENT_NOT_FOUND',
+          message: `Funding Agreement "${agreementId}" not found.`
+        }
+      }));
+      return true;
+    }
+
+    // Verify user is an authorized party on this agreement (Grantor or Grantee)
+    const access = checkAgreementAuthorization(authResult.user, agreement);
+    if (!access.authorized) {
+      res.statusCode = 403;
+      res.end(JSON.stringify({ error: access.error }));
+      return true;
+    }
+
+    // Parse and validate repo URL syntax and host security
+    let parsedRepo;
+    try {
+      parsedRepo = parseGithubRepoUrl(repoUrl);
+    } catch (err: any) {
+      res.statusCode = err.status || 400;
+      res.end(JSON.stringify({
+        error: {
+          code: err.code || 'INVALID_REPOSITORY_URL',
+          message: err.message || 'Invalid repository URL.'
+        }
+      }));
+      return true;
+    }
+
+    // Verify repository is associated with the agreement or one of its milestones
+    const isRepoInAgreement = agreement.milestones.some((m) => {
+      if (!m.repositoryUrl) return false;
+      try {
+        const parsedM = parseGithubRepoUrl(m.repositoryUrl);
+        return parsedM.normalizedUrl.toLowerCase() === parsedRepo.normalizedUrl.toLowerCase();
+      } catch {
+        return false;
+      }
+    });
+
+    if (!isRepoInAgreement) {
+      res.statusCode = 403;
+      res.end(JSON.stringify({
+        error: {
+          code: 'UNAUTHORIZED_REPOSITORY_CONTEXT',
+          message: `Repository "${parsedRepo.normalizedUrl}" is not associated with Funding Agreement "${agreementId}".`
+        }
+      }));
+      return true;
+    }
+
+    const branch = url.searchParams.get('branch') || undefined;
+    const since = url.searchParams.get('since') || undefined;
+
+    try {
+      const evidence = await fetchGithubEvidence({
+        repoUrl,
+        branch,
+        since,
+        token: process.env.GITHUB_TOKEN,
+        fetchFn: customFetchFn || fetch
+      });
+
+      res.statusCode = 200;
+      res.end(JSON.stringify({
+        success: true,
+        ...evidence
+      }));
+      return true;
+    } catch (err: any) {
+      res.statusCode = err.status || 500;
+      res.end(JSON.stringify({
+        error: {
+          code: err.code || 'EVIDENCE_RETRIEVAL_FAILED',
+          message: err.message || 'Failed to retrieve GitHub evidence.'
+        }
+      }));
+      return true;
+    }
   }
 
   return false;

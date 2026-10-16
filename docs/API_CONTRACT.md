@@ -1,4 +1,4 @@
-﻿# API Contract  VeriCommit MVP
+# API Contract  VeriCommit MVP
 
 **Status:** Proposed  backend and frontend leads must review and agree before implementation.
 
@@ -161,3 +161,110 @@ Before implementation, Joshua and Wale should confirm:
 5. Whether the first demo uses live GitHub retrieval, sample evidence, or both.
 
 Any agreed changes should be reflected in this document and communicated to both teams.
+
+---
+
+## 10. Evidence Retrieval Endpoint (Prompt 06)
+
+- **Method:** `GET`
+- **Path:** `/api/v1/evidence/github`
+- **Authentication:** Required (`Authorization: Bearer <Firebase_ID_Token>`)
+
+### 10.1 Query Parameters
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `repo_url` | string | Yes | GitHub repository URL (`https://github.com/:owner/:repo`) |
+| `agreement_id` | string | Yes | Associated Funding Agreement ID (for authorization context) |
+| `branch` | string | No | Optional target branch filter |
+| `since` | string | No | Optional ISO-8601 timestamp filter |
+
+### 10.2 Supported Repository URL Formats
+- `https://github.com/{owner}/{repo}`
+- `https://github.com/{owner}/{repo}/` (trailing slash normalized)
+- `https://github.com/{owner}/{repo}.git` (`.git` extension normalized)
+- `https://github.com/{owner}/{repo}/tree/{branch}` (branch safely extracted)
+- `https://github.com/{owner}/{repo}/blob/{branch}` (branch safely extracted)
+
+*Rejected:* non-https protocols, non-`github.com` hosts, custom ports, embedded credentials, path traversal (`..`), or SSRF attempts.
+
+### 10.3 Bounded Retrieval Limits
+- Commits: Max 20 recent commits.
+- Pull Requests: Max 20 pull requests.
+
+### 10.4 Response Structure
+
+```json
+{
+  "success": true,
+  "repository": {
+    "owner": "Pafekzy",
+    "repo": "product-poc1",
+    "url": "https://github.com/Pafekzy/product-poc1",
+    "branch": "main"
+  },
+  "retrievedAt": "2026-10-16T14:00:00.000Z",
+  "provenance": "live",
+  "isSample": false,
+  "commits": [
+    {
+      "id": "commit-1e3ae808f3c1a9...",
+      "type": "commit",
+      "owner": "Pafekzy",
+      "repo": "product-poc1",
+      "sha": "1e3ae80...",
+      "shortSha": "1e3ae80",
+      "title": "Refine feature carousel ordering and autoplay",
+      "commitMessage": "Refine feature carousel ordering and autoplay\n\nFull description...",
+      "url": "https://github.com/Pafekzy/product-poc1/commit/1e3ae80...",
+      "author": "alex-dev",
+      "authorAvatarUrl": "https://avatars.githubusercontent.com/u/...",
+      "committedAt": "2026-10-16T10:00:00Z",
+      "provider": "github",
+      "retrievedAt": "2026-10-16T14:00:00.000Z",
+      "isSample": false
+    }
+  ],
+  "pullRequests": [
+    {
+      "id": "pr-12",
+      "type": "pull_request",
+      "owner": "Pafekzy",
+      "repo": "product-poc1",
+      "number": 12,
+      "title": "Add member registration form",
+      "state": "merged",
+      "isMerged": true,
+      "mergedAt": "2026-10-12T10:00:00Z",
+      "url": "https://github.com/Pafekzy/product-poc1/pull/12",
+      "headBranch": "feature/registration",
+      "baseBranch": "main",
+      "author": "maria-ui",
+      "createdAt": "2026-10-10T10:00:00Z",
+      "updatedAt": "2026-10-12T10:00:00Z",
+      "provider": "github",
+      "retrievedAt": "2026-10-16T14:00:00.000Z",
+      "isSample": false
+    }
+  ],
+  "totalCommits": 1,
+  "totalPullRequests": 1
+}
+```
+
+### 10.5 Error Codes
+
+| Code | HTTP Status | Meaning |
+|---|---|---|
+| `UNAUTHORIZED` | 401 | Missing or invalid Firebase ID token. |
+| `INVALID_REPOSITORY_URL` | 400 | Malformed, non-HTTPS, or non-GitHub repository URL. |
+| `AGREEMENT_CONTEXT_REQUIRED` | 400 | `agreement_id` parameter missing. |
+| `AGREEMENT_NOT_FOUND` | 404 | Specified Funding Agreement does not exist. |
+| `FORBIDDEN_CROSS_AGREEMENT_ACCESS` | 403 | Authenticated user is not an authorized party on the agreement. |
+| `UNAUTHORIZED_REPOSITORY_CONTEXT` | 403 | Repository URL is not defined in any milestone of the agreement. |
+| `GITHUB_REPO_NOT_FOUND` | 404 | Repository does not exist or is private/inaccessible. |
+| `GITHUB_RATE_LIMITED` | 403 | GitHub API rate limit reached. Configure server `GITHUB_TOKEN`. |
+| `GITHUB_FORBIDDEN` | 403 | GitHub API rejected request with forbidden error. |
+| `GITHUB_TIMEOUT` | 504 | Upstream GitHub API request timed out (8s limit). |
+| `GITHUB_NETWORK_ERROR` | 502 | Upstream network failure connecting to `api.github.com`. |
+

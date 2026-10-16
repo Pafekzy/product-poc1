@@ -19,7 +19,8 @@ import {
   Info,
   LogIn,
   LogOut,
-  Database
+  Database,
+  RefreshCw
 } from 'lucide-react';
 import { FeatureCarousel } from './components/FeatureCarousel';
 import type { User } from 'firebase/auth';
@@ -89,6 +90,68 @@ export default function App() {
   const [newCriteriaText, setNewCriteriaText] = useState('1. Implementation of core components\n2. Validation errors handled correctly\n3. Integration tests demonstrate functionality');
   const [newRepoUrl, setNewRepoUrl] = useState('https://github.com/example/community-tools');
 
+  // Evidence Explorer State (Prompt 06)
+  const [evidenceViewMode, setEvidenceViewMode] = useState<'sample' | 'live'>('sample');
+  const [liveEvidence, setLiveEvidence] = useState<any | null>(null);
+  const [isFetchingEvidence, setIsFetchingEvidence] = useState<boolean>(false);
+  const [evidenceNotice, setEvidenceNotice] = useState<{ type: 'error' | 'success' | 'info'; message: string } | null>(null);
+
+  const handleFetchLiveEvidence = async () => {
+    setIsFetchingEvidence(true);
+    setEvidenceNotice(null);
+
+    // Require authenticated session
+    if (!currentUser) {
+      setIsFetchingEvidence(false);
+      setEvidenceNotice({
+        type: 'error',
+        message: 'Authentication required. In accordance with VeriCommit security rules, please sign in with Google in the header before fetching live repository evidence.'
+      });
+      return;
+    }
+
+    try {
+      const idToken = await currentUser.getIdToken();
+      const repoUrl = currentMilestone.repositoryUrl || 'https://github.com/Pafekzy/product-poc1';
+      const queryParams = new URLSearchParams({
+        repo_url: repoUrl,
+        agreement_id: currentAgreement.id
+      });
+
+      const res = await fetch(`/api/v1/evidence/github?${queryParams.toString()}`, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${idToken}`
+        }
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setEvidenceNotice({
+          type: 'error',
+          message: data.error?.message || `Failed to retrieve evidence (HTTP ${res.status}).`
+        });
+        setIsFetchingEvidence(false);
+        return;
+      }
+
+      setLiveEvidence(data);
+      setEvidenceViewMode('live');
+      setEvidenceNotice({
+        type: 'success',
+        message: `Successfully retrieved live evidence from ${data.repository?.owner}/${data.repository?.repo} (${data.totalCommits} commits, ${data.totalPullRequests} pull requests).`
+      });
+    } catch (err: any) {
+      setEvidenceNotice({
+        type: 'error',
+        message: err.message || 'Network error retrieving GitHub evidence.'
+      });
+    } finally {
+      setIsFetchingEvidence(false);
+    }
+  };
+
   // Initialize DB and subscribe to Firebase Auth & Firestore
   useEffect(() => {
     testFirestoreConnection().then(connected => {
@@ -157,12 +220,24 @@ export default function App() {
   const handleRunEvaluation = async (milestone: Milestone) => {
     setIsEvaluating(true);
     setEvalNotice(null);
+    setSelectedMilestoneId(milestone.id);
 
-    // Call server-side API endpoint to validate contract adherence
     try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (currentUser) {
+        try {
+          const token = await currentUser.getIdToken();
+          if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+          }
+        } catch {
+          // Token retrieval optional
+        }
+      }
+
       const apiRes = await fetch('/api/v1/evaluations', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           project_name: currentAgreement.title,
           repository_url: milestone.repositoryUrl || 'https://github.com/example/community-tools',
@@ -174,79 +249,39 @@ export default function App() {
           evidence_source: milestone.evidenceSource
         })
       });
-      const apiData = await apiRes.json();
-      console.info('Server API Response:', apiRes.status, apiData);
-    } catch (apiErr) {
-      console.warn('Server API call noted:', apiErr);
+
+      if (!apiRes.ok) {
+        const errorData = await apiRes.json().catch(() => ({}));
+        throw new Error(errorData.error?.message || `Evaluation request failed with HTTP ${apiRes.status}`);
+      }
+
+      const newEvaluation: EvaluationReport = await apiRes.json();
+
+      setEvaluations(prev => ({ ...prev, [newEvaluation.evaluation_id]: newEvaluation }));
+
+      // Persist to Cloud Firestore
+      await saveEvaluationToFirestore(currentAgreement.id, milestone.id, newEvaluation);
+
+      // Audit log entry
+      const newAudit: AuditLogEntry = {
+        id: `audit-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        actor: currentUser ? `${currentUser.displayName || currentUser.email} (User)` : 'AI Evaluation Service (Assisted)',
+        action: 'Generated Evidence Assessment',
+        entityType: 'Evaluation',
+        entityId: newEvaluation.evaluation_id,
+        details: `Assessed evidence for Milestone "${milestone.title}". Findings persisted to Cloud Firestore.`
+      };
+      await logAuditEventToFirestore(newAudit);
+
+      setEvalNotice('Evidence evaluation generated and persisted to Cloud Firestore.');
+      setActiveTab('verification-report');
+    } catch (apiErr: any) {
+      console.error('Evidence evaluation failed:', apiErr);
+      setEvalNotice(`Evaluation error: ${apiErr.message || 'Failed to complete evidence evaluation'}`);
+    } finally {
+      setIsEvaluating(false);
     }
-
-    const evalId = `eval-${Date.now()}`;
-    const newEvaluation: EvaluationReport = {
-      evaluation_id: evalId,
-      project_name: currentAgreement.title,
-      milestone_title: milestone.title,
-      overall_summary: `Evidence assessment completed for "${milestone.title}". Evaluation conducted strictly against pre-agreed acceptance criteria. Human review is required before any funding decision.`,
-      criteria_results: milestone.acceptanceCriteria.map((crit, idx) => {
-        let status: CriterionStatus = 'supported';
-        let explanation = 'Direct code references and commit messages substantiate the implementation.';
-        const evidenceList: Array<{ type: 'pull_request' | 'commit' | 'release'; title: string; url: string }> = [
-          {
-            type: 'pull_request',
-            title: `PR #${10 + idx}: Delivery for ${crit.description.slice(0, 35)}...`,
-            url: `${milestone.repositoryUrl}/pull/${10 + idx}`
-          }
-        ];
-
-        if (idx === 1) {
-          status = 'insufficient_evidence';
-          explanation = 'Available repository commits do not contain demonstrable evidence for this specific criterion.';
-          evidenceList.length = 0;
-        } else if (idx === 2) {
-          status = 'uncertain';
-          explanation = 'Test scaffolding exists, but assertions for failure boundaries cannot be confirmed from repository artifacts alone.';
-        }
-
-        return {
-          criterion: crit.description,
-          status,
-          explanation,
-          evidence: evidenceList
-        };
-      }),
-      suggested_next_steps: [
-        'Inspect pull request diffs for unresolved edge cases.',
-        'Request demonstration logs or staging deployment links from Grantee.',
-        'Authorize human grant approval in the Human Review screen.'
-      ],
-      limitations: [
-        'Static repository evidence cannot independently verify production runtime stability.',
-        'Evidence assessed from designated sample dataset.'
-      ],
-      human_review_required: true,
-      evaluated_at: new Date().toISOString(),
-      evidence_source: milestone.evidenceSource
-    };
-
-    setEvaluations(prev => ({ ...prev, [evalId]: newEvaluation }));
-
-    // Persist to Cloud Firestore
-    await saveEvaluationToFirestore(currentAgreement.id, milestone.id, newEvaluation);
-
-    // Audit log entry
-    const newAudit: AuditLogEntry = {
-      id: `audit-${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      actor: currentUser ? `${currentUser.displayName || currentUser.email} (User)` : 'AI Evaluation Service (Assisted)',
-      action: 'Generated Evidence Assessment',
-      entityType: 'Evaluation',
-      entityId: evalId,
-      details: `Assessed evidence for Milestone "${milestone.title}". Findings persisted to Cloud Firestore.`
-    };
-    await logAuditEventToFirestore(newAudit);
-
-    setIsEvaluating(false);
-    setEvalNotice('Evidence evaluation generated and persisted to Cloud Firestore.');
-    setActiveTab('verification-report');
   };
 
   // Handle Recording Human Decision
@@ -776,105 +811,338 @@ export default function App() {
         {/* TAB 3: EVIDENCE EXPLORER */}
         {activeTab === 'evidence-explorer' && (
           <div className="space-y-4 sm:space-y-6">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            {/* Header & Source Provenance Strip */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="min-w-0">
-                <span className="text-xs font-mono uppercase text-[#167D72] font-semibold">Traceable Artifacts</span>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-mono uppercase text-[#167D72] font-semibold">Traceable Artifacts</span>
+                  <span className="text-xs text-[#5B6673] font-mono truncate max-w-xs sm:max-w-md">
+                    {currentMilestone.repositoryUrl || 'https://github.com/Pafekzy/product-poc1'}
+                  </span>
+                </div>
                 <h1 className="text-xl sm:text-2xl font-bold text-[#142C3E] break-words">Evidence Explorer</h1>
                 <p className="text-xs text-[#5B6673] mt-1 break-words">
                   Examine commits, pull requests, and verified evidence associated with <strong>{currentMilestone.title}</strong>.
                 </p>
               </div>
-              <div className="px-3 py-1.5 rounded-lg bg-[#FFF1D6] text-[#8C5E00] text-xs border border-[#F2D696] font-medium shrink-0 self-start sm:self-auto">
-                Source: Sample Dataset
-              </div>
-            </div>
 
-            <div className="bg-white rounded-xl border border-[#DCE3E9] p-4 sm:p-6 shadow-xs">
-              <h2 className="text-base font-bold text-[#142C3E] mb-3 sm:mb-4 flex items-center gap-2">
-                <GitPullRequest className="w-4 h-4 text-[#167D72] shrink-0" />
-                Pull Requests & Branches
-              </h2>
-              <div className="space-y-3">
-                <div className="p-3.5 sm:p-4 rounded-lg border border-[#DCE3E9] bg-white hover:bg-gray-50 transition flex flex-col md:flex-row md:items-start justify-between gap-3 min-w-0">
-                  <div className="space-y-1.5 min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-mono text-xs bg-[#E6F4F2] text-[#167D72] px-2 py-0.5 rounded font-semibold">#12</span>
-                      <h3 className="text-sm font-semibold text-[#142C3E] break-words">Add member registration form and confirmation dialog</h3>
-                      <span className="text-[10px] bg-green-100 text-green-800 px-1.5 py-0.5 rounded font-mono font-bold">MERGED</span>
-                    </div>
-                    <p className="text-xs text-[#5B6673] break-words leading-relaxed">
-                      Implements registration modal, input validation handlers, and successful confirmation states.
-                    </p>
-                    <div className="font-mono text-[11px] text-[#7D94A6] break-words">
-                      Branch: <span className="text-[#142C3E]">feature/member-registration</span> • 6 commits • +420 / -18 lines
-                    </div>
-                  </div>
-                  <span className="text-xs text-[#167D72] font-medium flex items-center gap-1 font-mono break-all shrink-0">
-                    github.com/.../pull/12
-                  </span>
-                </div>
-
-                <div className="p-3.5 sm:p-4 rounded-lg border border-[#DCE3E9] bg-white hover:bg-gray-50 transition flex flex-col md:flex-row md:items-start justify-between gap-3 min-w-0">
-                  <div className="space-y-1.5 min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-mono text-xs bg-[#EEF2F6] text-[#5B6673] px-2 py-0.5 rounded font-semibold">#14</span>
-                      <h3 className="text-sm font-semibold text-[#142C3E] break-words">Initial test harness and mock runner setup</h3>
-                      <span className="text-[10px] bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded font-mono font-bold">OPEN</span>
-                    </div>
-                    <p className="text-xs text-[#5B6673] break-words leading-relaxed">
-                      Scaffolds Vitest suite for component unit testing and mock session handlers.
-                    </p>
-                    <div className="font-mono text-[11px] text-[#7D94A6] break-words">
-                      Branch: <span className="text-[#142C3E]">test/registration-coverage</span> • 2 commits • +110 / -4 lines
-                    </div>
-                  </div>
-                  <span className="text-xs text-[#167D72] font-medium flex items-center gap-1 font-mono break-all shrink-0">
-                    github.com/.../pull/14
-                  </span>
+              {/* Provenance Badge & Mode Switcher */}
+              <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
+                <div
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium border shrink-0 ${
+                    evidenceViewMode === 'live'
+                      ? 'bg-[#E6F4F2] text-[#167D72] border-[#A8DDD7]'
+                      : 'bg-[#FFF1D6] text-[#8C5E00] border-[#F2D696]'
+                  }`}
+                  data-testid="evidence-source-badge"
+                >
+                  {evidenceViewMode === 'live' ? 'Source: Live GitHub API' : 'Source: Sample Dataset'}
                 </div>
               </div>
             </div>
 
-            <div className="bg-white rounded-xl border border-[#DCE3E9] p-4 sm:p-6 shadow-xs">
-              <h2 className="text-base font-bold text-[#142C3E] mb-3 sm:mb-4 flex items-center gap-2">
-                <GitCommit className="w-4 h-4 text-[#167D72] shrink-0" />
-                Recent Verified Commits
-              </h2>
-              <div className="space-y-2">
-                {[
-                  {
-                    hash: '8f3c1a9',
-                    msg: 'Wire up user registration API client and confirmation modal',
-                    author: 'alex-dev',
-                    date: '2026-10-10'
-                  },
-                  {
-                    hash: '4a7e2b1',
-                    msg: 'Add registration test scaffold and placeholder test cases',
-                    author: 'alex-dev',
-                    date: '2026-10-09'
-                  },
-                  {
-                    hash: '1d98bc4',
-                    msg: 'Create registration form layout and field styling',
-                    author: 'maria-ui',
-                    date: '2026-10-08'
-                  }
-                ].map(c => (
-                  <div key={c.hash} className="p-3 rounded border border-[#DCE3E9] flex flex-col sm:flex-row sm:items-start justify-between gap-2 text-xs min-w-0">
-                    <div className="flex items-start gap-2.5 min-w-0 flex-1">
-                      <span className="font-mono bg-[#EEF2F6] text-[#142C3E] px-2 py-0.5 rounded font-bold shrink-0 mt-0.5">{c.hash}</span>
-                      <span className="font-medium text-[#17212B] break-words">{c.msg}</span>
-                    </div>
-                    <div className="text-[#5B6673] flex items-center gap-2 shrink-0 text-[11px] pt-1 sm:pt-0 self-start sm:self-auto font-mono">
-                      <span>{c.author}</span>
-                      <span>•</span>
-                      <span>{c.date}</span>
-                    </div>
+            {/* Action Bar: Fetch Live Button & Dataset Mode Toggles */}
+            <div className="bg-white rounded-xl border border-[#DCE3E9] p-3.5 sm:p-4 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleFetchLiveEvidence}
+                  disabled={isFetchingEvidence}
+                  data-testid="fetch-live-evidence-btn"
+                  className="flex items-center justify-center gap-2 px-4 py-2 bg-[#142C3E] text-white text-xs sm:text-sm font-medium rounded-lg hover:bg-[#1E3E56] disabled:opacity-50 transition shadow-xs min-h-[44px] cursor-pointer"
+                >
+                  <RefreshCw className={`w-4 h-4 ${isFetchingEvidence ? 'animate-spin' : ''}`} />
+                  {isFetchingEvidence ? 'Retrieving from GitHub...' : 'Fetch Live GitHub Evidence'}
+                </button>
+
+                {liveEvidence && (
+                  <div className="flex items-center rounded-lg border border-[#DCE3E9] p-0.5 bg-[#F5F7F9]">
+                    <button
+                      type="button"
+                      onClick={() => setEvidenceViewMode('live')}
+                      className={`px-3 py-1.5 text-xs font-medium rounded-md transition ${
+                        evidenceViewMode === 'live'
+                          ? 'bg-white text-[#142C3E] shadow-2xs font-bold'
+                          : 'text-[#5B6673] hover:text-[#142C3E]'
+                      }`}
+                    >
+                      Live
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEvidenceViewMode('sample')}
+                      className={`px-3 py-1.5 text-xs font-medium rounded-md transition ${
+                        evidenceViewMode === 'sample'
+                          ? 'bg-white text-[#142C3E] shadow-2xs font-bold'
+                          : 'text-[#5B6673] hover:text-[#142C3E]'
+                      }`}
+                    >
+                      Sample
+                    </button>
                   </div>
-                ))}
+                )}
+              </div>
+
+              <div className="text-[11px] sm:text-xs text-[#5B6673]">
+                {currentUser ? (
+                  <span>Authenticated as <strong className="text-[#142C3E]">{currentUser.email || currentUser.displayName}</strong></span>
+                ) : (
+                  <span className="text-[#8C5E00]">Sign in above to enable live repository retrieval</span>
+                )}
               </div>
             </div>
+
+            {/* Notification Banner */}
+            {evidenceNotice && (
+              <div
+                className={`p-3.5 sm:p-4 rounded-xl text-xs sm:text-sm flex items-center justify-between gap-2 ${
+                  evidenceNotice.type === 'error'
+                    ? 'bg-[#FDF3F2] border border-[#F5C2C0] text-[#9A2D2B]'
+                    : evidenceNotice.type === 'success'
+                    ? 'bg-[#E6F4F2] border border-[#A8DDD7] text-[#167D72]'
+                    : 'bg-[#EEF2F6] border border-[#DCE3E9] text-[#142C3E]'
+                }`}
+                data-testid="evidence-notice-banner"
+              >
+                <div className="flex items-start gap-2 min-w-0">
+                  <Info className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span className="break-words">{evidenceNotice.message}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setEvidenceNotice(null)}
+                  className="text-xs font-bold underline shrink-0 min-h-[44px] px-2 flex items-center"
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
+
+            {/* Invariant Disclaimer Strip */}
+            <div className="p-3 bg-[#FFF9EE] border border-[#F2E5CB] rounded-lg text-xs text-[#5A2D0C] flex items-start gap-2">
+              <ShieldCheck className="w-4 h-4 text-[#C88D3A] shrink-0 mt-0.5" />
+              <span>
+                <strong>Evidence Provenance Rule:</strong> Repository activity alone does not prove completion, originality, or production stability. Retrieved artifacts are untrusted evidence to support human evaluation.
+              </span>
+            </div>
+
+            {/* LIVE EVIDENCE VIEW */}
+            {evidenceViewMode === 'live' && liveEvidence && (
+              <div className="space-y-4 sm:space-y-6" data-testid="live-evidence-view">
+                {/* Pull Requests Section */}
+                <div className="bg-white rounded-xl border border-[#DCE3E9] p-4 sm:p-6 shadow-xs">
+                  <div className="flex items-center justify-between mb-3 sm:mb-4">
+                    <h2 className="text-base font-bold text-[#142C3E] flex items-center gap-2">
+                      <GitPullRequest className="w-4 h-4 text-[#167D72] shrink-0" />
+                      Pull Requests & Branches (Live from GitHub)
+                    </h2>
+                    <span className="text-xs font-mono font-semibold text-[#167D72] bg-[#E6F4F2] px-2 py-0.5 rounded">
+                      {liveEvidence.pullRequests.length} Retrieved
+                    </span>
+                  </div>
+
+                  {liveEvidence.pullRequests.length === 0 ? (
+                    <div className="p-6 text-center text-xs text-[#5B6673] bg-[#F5F7F9] rounded-lg border border-[#DCE3E9]">
+                      No pull requests returned from {liveEvidence.repository.owner}/{liveEvidence.repository.repo}.
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {liveEvidence.pullRequests.map((pr: any) => (
+                        <div
+                          key={pr.id}
+                          className="p-3.5 sm:p-4 rounded-lg border border-[#DCE3E9] bg-white hover:bg-gray-50 transition flex flex-col md:flex-row md:items-start justify-between gap-3 min-w-0"
+                        >
+                          <div className="space-y-1.5 min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-mono text-xs bg-[#E6F4F2] text-[#167D72] px-2 py-0.5 rounded font-semibold">
+                                #{pr.number}
+                              </span>
+                              <h3 className="text-sm font-semibold text-[#142C3E] break-words">{pr.title}</h3>
+                              <span
+                                className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-bold uppercase ${
+                                  pr.state === 'merged'
+                                    ? 'bg-green-100 text-green-800'
+                                    : pr.state === 'open'
+                                    ? 'bg-blue-100 text-blue-800'
+                                    : 'bg-gray-100 text-gray-800'
+                                }`}
+                              >
+                                {pr.state}
+                              </span>
+                              <span className="text-[10px] bg-[#E6F4F2] text-[#167D72] px-1.5 py-0.5 rounded font-mono font-bold">
+                                LIVE
+                              </span>
+                            </div>
+                            <div className="font-mono text-[11px] text-[#7D94A6] break-words">
+                              {pr.headBranch && pr.baseBranch ? (
+                                <>
+                                  Branch: <span className="text-[#142C3E]">{pr.headBranch}</span> → <span>{pr.baseBranch}</span> • Author:{' '}
+                                </>
+                              ) : null}
+                              <span className="text-[#142C3E]">{pr.author}</span> •{' '}
+                              <span>{new Date(pr.createdAt).toLocaleDateString()}</span>
+                            </div>
+                          </div>
+                          <a
+                            href={pr.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs text-[#167D72] hover:underline font-medium flex items-center gap-1 font-mono break-all shrink-0 min-h-[44px]"
+                          >
+                            <span>View on GitHub</span>
+                            <ExternalLink className="w-3.5 h-3.5" />
+                          </a>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Commits Section */}
+                <div className="bg-white rounded-xl border border-[#DCE3E9] p-4 sm:p-6 shadow-xs">
+                  <div className="flex items-center justify-between mb-3 sm:mb-4">
+                    <h2 className="text-base font-bold text-[#142C3E] flex items-center gap-2">
+                      <GitCommit className="w-4 h-4 text-[#167D72] shrink-0" />
+                      Recent Verified Commits (Live from GitHub)
+                    </h2>
+                    <span className="text-xs font-mono font-semibold text-[#167D72] bg-[#E6F4F2] px-2 py-0.5 rounded">
+                      {liveEvidence.commits.length} Retrieved
+                    </span>
+                  </div>
+
+                  {liveEvidence.commits.length === 0 ? (
+                    <div className="p-6 text-center text-xs text-[#5B6673] bg-[#F5F7F9] rounded-lg border border-[#DCE3E9]">
+                      No recent commits returned for this repository.
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {liveEvidence.commits.map((c: any) => (
+                        <div
+                          key={c.id}
+                          className="p-3 rounded border border-[#DCE3E9] flex flex-col sm:flex-row sm:items-start justify-between gap-2 text-xs min-w-0 hover:bg-gray-50 transition"
+                        >
+                          <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                            <span className="font-mono bg-[#EEF2F6] text-[#142C3E] px-2 py-0.5 rounded font-bold shrink-0 mt-0.5">
+                              {c.shortSha}
+                            </span>
+                            <div className="min-w-0">
+                              <span className="font-medium text-[#17212B] break-words">{c.title}</span>
+                              <div className="text-[11px] text-[#5B6673] font-mono mt-0.5">
+                                Author: <span className="text-[#142C3E]">{c.author}</span> •{' '}
+                                {new Date(c.committedAt).toLocaleDateString()}
+                              </div>
+                            </div>
+                          </div>
+                          <a
+                            href={c.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[#167D72] hover:underline flex items-center gap-1 font-mono text-[11px] shrink-0 pt-1 sm:pt-0 self-start sm:self-auto min-h-[44px]"
+                          >
+                            <span>Commit diff</span>
+                            <ExternalLink className="w-3 h-3" />
+                          </a>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* SAMPLE EVIDENCE VIEW */}
+            {evidenceViewMode === 'sample' && (
+              <div className="space-y-4 sm:space-y-6" data-testid="sample-evidence-view">
+                <div className="bg-white rounded-xl border border-[#DCE3E9] p-4 sm:p-6 shadow-xs">
+                  <h2 className="text-base font-bold text-[#142C3E] mb-3 sm:mb-4 flex items-center gap-2">
+                    <GitPullRequest className="w-4 h-4 text-[#167D72] shrink-0" />
+                    Pull Requests & Branches (Sample Dataset)
+                  </h2>
+                  <div className="space-y-3">
+                    <div className="p-3.5 sm:p-4 rounded-lg border border-[#DCE3E9] bg-white hover:bg-gray-50 transition flex flex-col md:flex-row md:items-start justify-between gap-3 min-w-0">
+                      <div className="space-y-1.5 min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-mono text-xs bg-[#E6F4F2] text-[#167D72] px-2 py-0.5 rounded font-semibold">#12</span>
+                          <h3 className="text-sm font-semibold text-[#142C3E] break-words">Add member registration form and confirmation dialog</h3>
+                          <span className="text-[10px] bg-green-100 text-green-800 px-1.5 py-0.5 rounded font-mono font-bold">MERGED</span>
+                          <span className="text-[10px] bg-[#FFF1D6] text-[#8C5E00] px-1.5 py-0.5 rounded font-mono font-bold">SAMPLE</span>
+                        </div>
+                        <p className="text-xs text-[#5B6673] break-words leading-relaxed">
+                          Implements registration modal, input validation handlers, and successful confirmation states.
+                        </p>
+                        <div className="font-mono text-[11px] text-[#7D94A6] break-words">
+                          Branch: <span className="text-[#142C3E]">feature/member-registration</span> • 6 commits • +420 / -18 lines
+                        </div>
+                      </div>
+                      <span className="text-xs text-[#167D72] font-medium flex items-center gap-1 font-mono break-all shrink-0">
+                        github.com/.../pull/12
+                      </span>
+                    </div>
+
+                    <div className="p-3.5 sm:p-4 rounded-lg border border-[#DCE3E9] bg-white hover:bg-gray-50 transition flex flex-col md:flex-row md:items-start justify-between gap-3 min-w-0">
+                      <div className="space-y-1.5 min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-mono text-xs bg-[#EEF2F6] text-[#5B6673] px-2 py-0.5 rounded font-semibold">#14</span>
+                          <h3 className="text-sm font-semibold text-[#142C3E] break-words">Initial test harness and mock runner setup</h3>
+                          <span className="text-[10px] bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded font-mono font-bold">OPEN</span>
+                          <span className="text-[10px] bg-[#FFF1D6] text-[#8C5E00] px-1.5 py-0.5 rounded font-mono font-bold">SAMPLE</span>
+                        </div>
+                        <p className="text-xs text-[#5B6673] break-words leading-relaxed">
+                          Scaffolds Vitest suite for component unit testing and mock session handlers.
+                        </p>
+                        <div className="font-mono text-[11px] text-[#7D94A6] break-words">
+                          Branch: <span className="text-[#142C3E]">test/registration-coverage</span> • 2 commits • +110 / -4 lines
+                        </div>
+                      </div>
+                      <span className="text-xs text-[#167D72] font-medium flex items-center gap-1 font-mono break-all shrink-0">
+                        github.com/.../pull/14
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-xl border border-[#DCE3E9] p-4 sm:p-6 shadow-xs">
+                  <h2 className="text-base font-bold text-[#142C3E] mb-3 sm:mb-4 flex items-center gap-2">
+                    <GitCommit className="w-4 h-4 text-[#167D72] shrink-0" />
+                    Recent Verified Commits (Sample Dataset)
+                  </h2>
+                  <div className="space-y-2">
+                    {[
+                      {
+                        hash: '8f3c1a9',
+                        msg: 'Wire up user registration API client and confirmation modal',
+                        author: 'alex-dev',
+                        date: '2026-10-10'
+                      },
+                      {
+                        hash: '4a7e2b1',
+                        msg: 'Add registration test scaffold and placeholder test cases',
+                        author: 'alex-dev',
+                        date: '2026-10-09'
+                      },
+                      {
+                        hash: '1d98bc4',
+                        msg: 'Create registration form layout and field styling',
+                        author: 'maria-ui',
+                        date: '2026-10-08'
+                      }
+                    ].map(c => (
+                      <div key={c.hash} className="p-3 rounded border border-[#DCE3E9] flex flex-col sm:flex-row sm:items-start justify-between gap-2 text-xs min-w-0">
+                        <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                          <span className="font-mono bg-[#EEF2F6] text-[#142C3E] px-2 py-0.5 rounded font-bold shrink-0 mt-0.5">{c.hash}</span>
+                          <span className="font-medium text-[#17212B] break-words">{c.msg}</span>
+                        </div>
+                        <div className="text-[#5B6673] flex items-center gap-2 shrink-0 text-[11px] pt-1 sm:pt-0 self-start sm:self-auto font-mono">
+                          <span>{c.author}</span>
+                          <span>•</span>
+                          <span>{c.date}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 

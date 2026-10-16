@@ -67,6 +67,24 @@ export const initialFundingAgreements: FundingAgreement[] = [
             status: 'human_decision_pending'
           }
         ]
+      },
+      {
+        id: 'ms-03',
+        fundingAgreementId: 'fa-8041',
+        title: 'VeriCommit Live Verification Target',
+        description: 'Verify live commits and artifacts in the official product repository Pafekzy/product-poc1.',
+        repositoryUrl: 'https://github.com/Pafekzy/product-poc1',
+        evidenceSource: 'github',
+        targetDate: '2026-10-25',
+        createdAt: '2026-10-16T12:00:00Z',
+        updatedAt: '2026-10-16T12:00:00Z',
+        acceptanceCriteria: [
+          {
+            id: 'ac-6',
+            description: 'Public repository artifacts can be queried and displayed with live provenance.',
+            status: 'human_decision_pending'
+          }
+        ]
       }
     ]
   }
