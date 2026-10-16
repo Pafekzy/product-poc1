@@ -1,0 +1,8 @@
+{
+  "name": "VeriCommit",
+  "description": "Evidence-led milestone verification for software grants.",
+  "permissions": [],
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

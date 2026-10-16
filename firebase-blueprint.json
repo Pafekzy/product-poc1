@@ -1,0 +1,115 @@
+{
+  "entities": {
+    "FundingAgreement": {
+      "title": "FundingAgreement",
+      "description": "Formal funding agreement connecting one responsible Grantor and one Grantee.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "grantorId": { "type": "string" },
+        "grantorName": { "type": "string" },
+        "granteeId": { "type": "string" },
+        "granteeName": { "type": "string" },
+        "description": { "type": "string" },
+        "totalCommitment": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "completed", "terminated"] },
+        "createdAt": { "type": "string" },
+        "createdBy": { "type": "string" }
+      },
+      "required": ["id", "title", "grantorId", "granteeId", "status", "createdAt"]
+    },
+    "Milestone": {
+      "title": "Milestone",
+      "description": "Defined milestone deliverable belonging to exactly one Funding Agreement.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "fundingAgreementId": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "repositoryUrl": { "type": "string" },
+        "evidenceSource": { "type": "string", "enum": ["github", "sample"] },
+        "targetDate": { "type": "string" },
+        "evaluationId": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "createdBy": { "type": "string" }
+      },
+      "required": ["id", "fundingAgreementId", "title", "evidenceSource", "createdAt"]
+    },
+    "EvaluationReport": {
+      "title": "EvaluationReport",
+      "description": "AI-assisted evaluation assessing evidence against agreed acceptance criteria.",
+      "type": "object",
+      "properties": {
+        "evaluation_id": { "type": "string" },
+        "project_name": { "type": "string" },
+        "milestone_id": { "type": "string" },
+        "milestone_title": { "type": "string" },
+        "overall_summary": { "type": "string" },
+        "criteria_results": { "type": "array" },
+        "suggested_next_steps": { "type": "array" },
+        "limitations": { "type": "array" },
+        "human_review_required": { "type": "boolean" },
+        "evaluated_at": { "type": "string" },
+        "evidence_source": { "type": "string" }
+      },
+      "required": ["evaluation_id", "project_name", "milestone_title", "overall_summary", "human_review_required", "evaluated_at"]
+    },
+    "HumanDecision": {
+      "title": "HumanDecision",
+      "description": "Consequential funding and milestone approval decision signed by an authorized human.",
+      "type": "object",
+      "properties": {
+        "decision_id": { "type": "string" },
+        "milestone_id": { "type": "string" },
+        "reviewer_name": { "type": "string" },
+        "reviewer_role": { "type": "string" },
+        "reviewer_uid": { "type": "string" },
+        "status": { "type": "string", "enum": ["approved", "rejected", "changes_requested"] },
+        "reasoning": { "type": "string" },
+        "recorded_at": { "type": "string" }
+      },
+      "required": ["decision_id", "milestone_id", "reviewer_name", "reviewer_role", "status", "reasoning", "recorded_at"]
+    },
+    "AuditLogEntry": {
+      "title": "AuditLogEntry",
+      "description": "Immutable chronological event log for traceability.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "actor": { "type": "string" },
+        "actor_uid": { "type": "string" },
+        "action": { "type": "string" },
+        "entityType": { "type": "string" },
+        "entityId": { "type": "string" },
+        "details": { "type": "string" }
+      },
+      "required": ["id", "timestamp", "actor", "action", "entityType", "entityId", "details"]
+    }
+  },
+  "firestore": {
+    "/funding_agreements/{agreementId}": {
+      "schema": { "$ref": "#/entities/FundingAgreement" },
+      "description": "Funding agreement documents."
+    },
+    "/funding_agreements/{agreementId}/milestones/{milestoneId}": {
+      "schema": { "$ref": "#/entities/Milestone" },
+      "description": "Milestones belonging strictly to the parent Funding Agreement."
+    },
+    "/evaluations/{evaluationId}": {
+      "schema": { "$ref": "#/entities/EvaluationReport" },
+      "description": "Evidence evaluation reports."
+    },
+    "/human_decisions/{decisionId}": {
+      "schema": { "$ref": "#/entities/HumanDecision" },
+      "description": "Authorized human decisions."
+    },
+    "/audit_logs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLogEntry" },
+      "description": "Traceable event log."
+    }
+  }
+}

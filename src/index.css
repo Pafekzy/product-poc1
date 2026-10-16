@@ -1,0 +1,24 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --color-primary-navy: #142C3E;
+    --color-verification-green: #167D72;
+    --color-surface-white: #FFFFFF;
+    --color-app-bg: #F5F7F9;
+    --color-primary-text: #17212B;
+    --color-secondary-text: #5B6673;
+    --color-border-gray: #DCE3E9;
+    --color-attention-amber: #FFF1D6;
+  }
+
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background-color: #F5F7F9;
+    color: #17212B;
+  }
+
+  code, pre, .font-mono {
+    font-family: 'JetBrains Mono', monospace;
+  }
+}

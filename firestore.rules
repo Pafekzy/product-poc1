@@ -1,0 +1,84 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default Deny Catch-All
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Funding Agreements
+    match /funding_agreements/{agreementId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(agreementId)
+        && incoming().keys().hasAll(['id', 'title', 'grantorId', 'granteeId', 'status', 'createdAt'])
+        && incoming().id is string && incoming().title is string && incoming().title.size() <= 200
+        && incoming().status in ['active', 'completed', 'terminated'];
+      allow update: if isSignedIn() && isValidId(agreementId)
+        && incoming().id == existing().id
+        && incoming().grantorId == existing().grantorId
+        && incoming().granteeId == existing().granteeId;
+      allow delete: if false;
+
+      // Sub-collection Milestones: Belonging strictly to the parent Funding Agreement
+      match /milestones/{milestoneId} {
+        allow read: if isSignedIn();
+        allow create: if isSignedIn() && isValidId(milestoneId)
+          && incoming().keys().hasAll(['id', 'fundingAgreementId', 'title', 'evidenceSource', 'createdAt'])
+          && incoming().fundingAgreementId == agreementId
+          && incoming().title is string && incoming().title.size() <= 200
+          && incoming().evidenceSource in ['github', 'sample'];
+        allow update: if isSignedIn() && isValidId(milestoneId)
+          && incoming().id == existing().id
+          && incoming().fundingAgreementId == existing().fundingAgreementId;
+        allow delete: if false;
+      }
+    }
+
+    // Evaluations
+    match /evaluations/{evaluationId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(evaluationId)
+        && incoming().keys().hasAll(['evaluation_id', 'project_name', 'milestone_title', 'overall_summary', 'human_review_required', 'evaluated_at'])
+        && incoming().human_review_required == true;
+      allow update: if false; // Evaluations are snapshot assessments
+      allow delete: if false;
+    }
+
+    // Human Decisions
+    match /human_decisions/{decisionId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(decisionId)
+        && incoming().keys().hasAll(['decision_id', 'milestone_id', 'reviewer_name', 'reviewer_role', 'status', 'reasoning', 'recorded_at'])
+        && incoming().status in ['approved', 'rejected', 'changes_requested']
+        && incoming().reasoning is string && incoming().reasoning.size() > 0 && incoming().reasoning.size() <= 2000;
+      allow update: if false; // Decisions cannot be silently rewritten
+      allow delete: if false;
+    }
+
+    // Audit Logs: Append-Only Immutable Records
+    match /audit_logs/{logId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(logId)
+        && incoming().keys().hasAll(['id', 'timestamp', 'actor', 'action', 'entityType', 'entityId', 'details'])
+        && incoming().details is string && incoming().details.size() <= 4000;
+      allow update: if false; // Non-repudiable audit logs
+      allow delete: if false;
+    }
+  }
+}
