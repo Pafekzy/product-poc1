@@ -6,7 +6,6 @@ import {
   Pause,
   ShieldCheck,
   FileCheck2,
-  GitPullRequest,
   UserCheck,
   Users,
   Share2,
@@ -26,58 +25,21 @@ export interface CarouselSlide {
   badge: string;
   keyTakeaway: string;
   iconName:
-    | 'ShieldCheck'
-    | 'GitPullRequest'
-    | 'FileCheck2'
     | 'UserCheck'
+    | 'ShieldCheck'
     | 'Users'
     | 'Share2'
     | 'ArrowRightCircle'
     | 'Layers'
-    | 'AlertOctagon';
+    | 'AlertOctagon'
+    | 'FileCheck2';
 }
 
 export const featureSlides: CarouselSlide[] = [
   {
-    id: 'agreements-milestones',
-    category: 'Agreements & Milestones',
-    storyNumber: '01 / 09',
-    heading: 'Pre-Agreed Acceptance Criteria',
-    description: 'Establish explicit funding agreements connecting one responsible Grantor and one Grantee. Milestones and unambiguous acceptance criteria are agreed upon before work begins, not invented after submission.',
-    image: '/images/scenario-01-one-grantor-multiple-milestones.png',
-    imageAlt: 'Funding Agreement connecting Grantor and Grantee with multiple defined milestones',
-    badge: 'Scope Invariant',
-    keyTakeaway: 'One Agreement • One Grantor • One Grantee',
-    iconName: 'ShieldCheck'
-  },
-  {
-    id: 'evidence-collection',
-    category: 'Evidence Collection',
-    storyNumber: '02 / 09',
-    heading: 'Traceable Repository Evidence',
-    description: 'Gather verifiable repository artifacts including pull requests, commit histories, branch diffs, and test runs. Repository text is treated as untrusted evidence rather than instructions that override rules.',
-    image: '/images/VeriCommit Team Backlog Roadmap.png',
-    imageAlt: 'Roadmap showing progression from agreed milestones to evidence collection',
-    badge: 'Provenance Invariant',
-    keyTakeaway: 'Commits • Pull Requests • CI Runs',
-    iconName: 'GitPullRequest'
-  },
-  {
-    id: 'evidence-verification',
-    category: 'Evidence-Based Verification',
-    storyNumber: '03 / 09',
-    heading: 'Criterion-by-Criterion AI Assessment',
-    description: 'AI evaluates demonstrable evidence against agreed acceptance criteria without fabricating claims. The system highlights supported progress, insufficient evidence, and uncertainty separately.',
-    image: '/images/vericommit-evidence-workflow-infographic.png',
-    imageAlt: 'VeriCommit Evidence Workflow comparing evidence against pre-agreed criteria',
-    badge: 'Honesty Invariant',
-    keyTakeaway: 'Supported • Insufficient • Uncertain',
-    iconName: 'FileCheck2'
-  },
-  {
     id: 'human-review-audit',
     category: 'Human Review & Auditability',
-    storyNumber: '04 / 09',
+    storyNumber: '01 / 08',
     heading: 'Human Authority & Traceable Decisions',
     description: 'AI informs, but authorized humans decide. Grantors record explicit justification for milestone approvals, while an append-only audit trail preserves complete relationship history.',
     image: '/images/VeriCommit Grant Flow Diagram.png',
@@ -87,9 +49,21 @@ export const featureSlides: CarouselSlide[] = [
     iconName: 'UserCheck'
   },
   {
+    id: 'agreements-milestones',
+    category: 'Agreements & Milestones',
+    storyNumber: '02 / 08',
+    heading: 'Pre-Agreed Acceptance Criteria',
+    description: 'Establish explicit funding agreements connecting one responsible Grantor and one Grantee. Milestones and unambiguous acceptance criteria are agreed upon before work begins, not invented after submission.',
+    image: '/images/scenario-01-one-grantor-multiple-milestones.png',
+    imageAlt: 'Funding Agreement connecting Grantor and Grantee with multiple defined milestones',
+    badge: 'Scope Invariant',
+    keyTakeaway: 'One Agreement • One Grantor • One Grantee',
+    iconName: 'ShieldCheck'
+  },
+  {
     id: 'one-grantor-multiple-grantees',
     category: 'Funding Relationships',
-    storyNumber: '05 / 09',
+    storyNumber: '03 / 08',
     heading: 'One Grantor. Multiple Grantees.',
     description: 'Support funding relationships in which one grantor manages separate agreements with multiple grantees. Keep each agreement, its milestones, evidence, and decisions associated with the correct parties.',
     image: '/images/scenario-02-one-grantor-multiple-grantees.png',
@@ -101,7 +75,7 @@ export const featureSlides: CarouselSlide[] = [
   {
     id: 'multiple-grantors-one-grantee',
     category: 'Funding Relationships',
-    storyNumber: '06 / 09',
+    storyNumber: '04 / 08',
     heading: 'Multiple Grantors. One Grantee.',
     description: 'Illustrate how one grantee may participate in multiple funding agreements with different grantors. Preserve the boundaries between agreements so evidence, permissions, and decisions do not cross into another funding relationship.',
     image: '/images/scenario-03-multiple-grantors-one-grantee.png',
@@ -113,7 +87,7 @@ export const featureSlides: CarouselSlide[] = [
   {
     id: 'sequential-funding',
     category: 'Funding Progression',
-    storyNumber: '07 / 09',
+    storyNumber: '05 / 08',
     heading: 'Funding That Follows Verified Progress.',
     description: 'Show how funding stages can be organized in sequence, with each stage governed by its agreed milestones and review requirements. Completion of one stage should not automatically authorize the next; applicable human decisions and agreement terms remain essential.',
     image: '/images/scenario-04-sequential-funding.png',
@@ -125,7 +99,7 @@ export const featureSlides: CarouselSlide[] = [
   {
     id: 'collaborative-grantor',
     category: 'Grantor Collaboration',
-    storyNumber: '08 / 09',
+    storyNumber: '06 / 08',
     heading: 'Collaboration Without Losing Accountability.',
     description: 'Explore a collaborative grantor scenario while preserving clear responsibility for each agreement and decision. Treat shared participation as a domain scenario, not a claim that multi-grantor authorization has already been implemented.',
     image: '/images/scenario-05-collaborative-grantor.png',
@@ -137,7 +111,7 @@ export const featureSlides: CarouselSlide[] = [
   {
     id: 'invalid-and-valid-alternatives',
     category: 'Domain Integrity',
-    storyNumber: '09 / 09',
+    storyNumber: '07 / 08',
     heading: 'Make Valid Relationships Explicit.',
     description: 'Distinguish permitted funding and milestone relationships from invalid alternatives. Enforce agreement boundaries and prevent ambiguous reassignment or ownership changes from being presented as valid workflows.',
     image: '/images/scenario-06-invalid-and-valid-alternatives.png',
@@ -145,6 +119,18 @@ export const featureSlides: CarouselSlide[] = [
     badge: 'Integrity Boundaries',
     keyTakeaway: 'No Split Milestones • Explicit Reassignment • Auditable History',
     iconName: 'AlertOctagon'
+  },
+  {
+    id: 'evidence-verification',
+    category: 'Evidence-Based Verification',
+    storyNumber: '08 / 08',
+    heading: 'Criterion-by-Criterion AI Assessment',
+    description: 'AI evaluates demonstrable evidence against agreed acceptance criteria without fabricating claims. The system highlights supported progress, insufficient evidence, and uncertainty separately.',
+    image: '/images/vericommit-evidence-workflow-infographic.png',
+    imageAlt: 'VeriCommit Evidence Workflow comparing evidence against pre-agreed criteria',
+    badge: 'Honesty Invariant',
+    keyTakeaway: 'Supported • Insufficient • Uncertain',
+    iconName: 'FileCheck2'
   }
 ];
 
@@ -227,7 +213,6 @@ export function FeatureCarousel() {
       e.preventDefault();
       goToNext();
     } else if (e.key === ' ' || e.key === 'Spacebar') {
-      // Toggle play/pause if space is pressed directly on the carousel container
       if (e.target === containerRef.current) {
         e.preventDefault();
         toggleAutoPlay();
@@ -250,14 +235,10 @@ export function FeatureCarousel() {
   const renderIcon = (iconName: CarouselSlide['iconName']) => {
     const iconClass = 'w-4 h-4 text-[#167D72] shrink-0';
     switch (iconName) {
-      case 'ShieldCheck':
-        return <ShieldCheck className={iconClass} />;
-      case 'GitPullRequest':
-        return <GitPullRequest className={iconClass} />;
-      case 'FileCheck2':
-        return <FileCheck2 className={iconClass} />;
       case 'UserCheck':
         return <UserCheck className={iconClass} />;
+      case 'ShieldCheck':
+        return <ShieldCheck className={iconClass} />;
       case 'Users':
         return <Users className={iconClass} />;
       case 'Share2':
@@ -268,14 +249,13 @@ export function FeatureCarousel() {
         return <Layers className={iconClass} />;
       case 'AlertOctagon':
         return <AlertOctagon className={iconClass} />;
+      case 'FileCheck2':
+        return <FileCheck2 className={iconClass} />;
       default:
         return <ShieldCheck className={iconClass} />;
     }
   };
 
-  // Screen-reader live region strategy:
-  // When autoplay is running uninterrupted, set to 'off' to prevent verbal bombardment every 2 seconds.
-  // When paused or manually controlled, set to 'polite' to announce slide changes.
   const isActivelyAutoPlaying = isAutoPlayActive && !isHovered && !isFocused;
   const liveRegionMode = isActivelyAutoPlaying ? 'off' : 'polite';
 
@@ -392,9 +372,9 @@ export function FeatureCarousel() {
             </div>
           </div>
 
-          {/* Interactive Navigation Row: 9 Pagination Indicators + Prev/Next Buttons */}
+          {/* Interactive Navigation Row: 8 Pagination Indicators + Prev/Next Buttons */}
           <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            {/* 9 Pagination Indicators with accessible labels and touch targets */}
+            {/* 8 Pagination Indicators with accessible labels and touch targets */}
             <div
               className="flex items-center flex-wrap gap-1.5"
               role="tablist"
