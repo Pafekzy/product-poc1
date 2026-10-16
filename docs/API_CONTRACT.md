@@ -128,6 +128,11 @@ Suggested error codes:
 - `INVALID_REPOSITORY_URL`  repository URL is invalid or unsupported.
 - `REPOSITORY_ACCESS_DENIED`  the application cannot access the repository.
 - `EVIDENCE_RETRIEVAL_FAILED`  evidence could not be retrieved.
+- `GEMINI_CONFIG_MISSING`  Gemini API key is not configured on the server.
+- `GEMINI_TIMEOUT`  Gemini request timed out waiting for upstream response.
+- `GEMINI_PROVIDER_ERROR`  Gemini API returned an upstream error.
+- `GEMINI_INVALID_OUTPUT`  Gemini returned an empty or malformed JSON response.
+- `GEMINI_SCHEMA_VALIDATION_FAILED`  Gemini response failed schema validation.
 - `EVALUATION_FAILED`  evaluation could not be completed.
 
 The frontend should display an understandable message and allow the user to recover where possible.

@@ -74,7 +74,7 @@ export default function App() {
 
   // Modal & Async states
   const [isEvaluating, setIsEvaluating] = useState<boolean>(false);
-  const [evalNotice, setEvalNotice] = useState<string | null>(null);
+  const [evalNotice, setEvalNotice] = useState<{ type: 'error' | 'success'; message: string } | null>(null);
 
   // Review Form state
   const [reviewerName, setReviewerName] = useState<string>('Elena Vance');
@@ -252,7 +252,8 @@ export default function App() {
 
       if (!apiRes.ok) {
         const errorData = await apiRes.json().catch(() => ({}));
-        throw new Error(errorData.error?.message || `Evaluation request failed with HTTP ${apiRes.status}`);
+        const codeMsg = errorData.error?.code ? `[${errorData.error.code}] ` : '';
+        throw new Error(`${codeMsg}${errorData.error?.message || `Evaluation request failed with HTTP ${apiRes.status}`}`);
       }
 
       const newEvaluation: EvaluationReport = await apiRes.json();
@@ -274,11 +275,17 @@ export default function App() {
       };
       await logAuditEventToFirestore(newAudit);
 
-      setEvalNotice('Evidence evaluation generated and persisted to Cloud Firestore.');
+      setEvalNotice({
+        type: 'success',
+        message: 'Evidence evaluation generated and persisted to Cloud Firestore.'
+      });
       setActiveTab('verification-report');
     } catch (apiErr: any) {
       console.error('Evidence evaluation failed:', apiErr);
-      setEvalNotice(`Evaluation error: ${apiErr.message || 'Failed to complete evidence evaluation'}`);
+      setEvalNotice({
+        type: 'error',
+        message: `Evaluation failed: ${apiErr.message || 'Failed to complete evidence evaluation'}`
+      });
     } finally {
       setIsEvaluating(false);
     }
@@ -547,6 +554,33 @@ export default function App() {
               className="w-full sm:w-auto px-4 py-2.5 bg-[#142C3E] text-white text-xs sm:text-sm font-medium rounded-lg hover:bg-[#1E3E56] transition shrink-0 min-h-[44px] text-center flex items-center justify-center"
             >
               Review Milestone
+            </button>
+          </div>
+        )}
+
+        {/* Prominent Evaluation Notice (Success or Explicit Error) */}
+        {evalNotice && activeTab !== 'verification-report' && (
+          <div
+            className={`mb-4 sm:mb-6 p-3.5 sm:p-4 rounded-xl text-xs sm:text-sm flex items-center justify-between gap-2 shadow-xs ${
+              evalNotice.type === 'error'
+                ? 'bg-[#FDF3F2] border border-[#F5C2C0] text-[#9A2D2B]'
+                : 'bg-[#E6F4F2] border border-[#A8DDD7] text-[#167D72]'
+            }`}
+            data-testid="evaluation-notice-banner"
+          >
+            <div className="flex items-start gap-2.5 min-w-0">
+              {evalNotice.type === 'error' ? (
+                <AlertTriangle className="w-5 h-5 text-[#9A2D2B] shrink-0 mt-0.5" />
+              ) : (
+                <CheckCircle2 className="w-5 h-5 text-[#167D72] shrink-0 mt-0.5" />
+              )}
+              <span className="break-words font-medium">{evalNotice.message}</span>
+            </div>
+            <button
+              onClick={() => setEvalNotice(null)}
+              className="text-xs font-bold underline shrink-0 min-h-[44px] px-2 flex items-center cursor-pointer"
+            >
+              Dismiss
             </button>
           </div>
         )}
@@ -1150,9 +1184,27 @@ export default function App() {
         {activeTab === 'verification-report' && (
           <div className="space-y-4 sm:space-y-6">
             {evalNotice && (
-              <div className="p-3.5 sm:p-4 bg-[#E6F4F2] border border-[#A8DDD7] text-[#167D72] rounded-xl text-xs sm:text-sm flex items-center justify-between gap-2">
-                <span className="break-words">{evalNotice}</span>
-                <button onClick={() => setEvalNotice(null)} className="text-xs font-bold underline shrink-0 min-h-[44px] px-2 flex items-center">Dismiss</button>
+              <div
+                className={`p-3.5 sm:p-4 rounded-xl text-xs sm:text-sm flex items-center justify-between gap-2 shadow-xs ${
+                  evalNotice.type === 'error'
+                    ? 'bg-[#FDF3F2] border border-[#F5C2C0] text-[#9A2D2B]'
+                    : 'bg-[#E6F4F2] border border-[#A8DDD7] text-[#167D72]'
+                }`}
+              >
+                <div className="flex items-start gap-2.5 min-w-0">
+                  {evalNotice.type === 'error' ? (
+                    <AlertTriangle className="w-5 h-5 text-[#9A2D2B] shrink-0 mt-0.5" />
+                  ) : (
+                    <CheckCircle2 className="w-5 h-5 text-[#167D72] shrink-0 mt-0.5" />
+                  )}
+                  <span className="break-words font-medium">{evalNotice.message}</span>
+                </div>
+                <button
+                  onClick={() => setEvalNotice(null)}
+                  className="text-xs font-bold underline shrink-0 min-h-[44px] px-2 flex items-center cursor-pointer"
+                >
+                  Dismiss
+                </button>
               </div>
             )}
 

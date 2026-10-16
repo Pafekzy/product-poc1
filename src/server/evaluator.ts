@@ -8,6 +8,20 @@ import {
 } from '../types';
 import { fetchGithubEvidence } from './github';
 
+export interface EvaluatorError {
+  code:
+    | 'GEMINI_CONFIG_MISSING'
+    | 'GEMINI_TIMEOUT'
+    | 'GEMINI_PROVIDER_ERROR'
+    | 'GEMINI_INVALID_OUTPUT'
+    | 'GEMINI_SCHEMA_VALIDATION_FAILED'
+    | 'EVALUATION_FAILED'
+    | 'EVIDENCE_RETRIEVAL_FAILED'
+    | 'INVALID_REQUEST';
+  message: string;
+  status: number;
+}
+
 export interface EvaluateMilestoneInput {
   project_name: string;
   repository_url: string;
@@ -20,6 +34,9 @@ export interface EvaluateMilestoneInput {
   evidence_items?: EvidenceItem[];
   geminiApiKey?: string;
   fetchFn?: typeof fetch;
+  aiClient?: any;
+  timeoutMs?: number;
+  mode?: 'gemini' | 'deterministic';
 }
 
 export const SAMPLE_EVIDENCE_ITEMS: EvidenceItem[] = [
@@ -203,8 +220,9 @@ export function evaluateEvidenceDeterministically(
 
 /**
  * Main evaluation entry point.
- * Calls Gemini 3.8 Flash model when GEMINI_API_KEY is available,
- * falling back gracefully to the deterministic rule engine when offline or in tests.
+ * Calls Gemini 3.8 Flash model via @google/genai structured outputs.
+ * Throws explicit, structured EvaluatorErrors on missing config, timeout,
+ * provider failure, or invalid schema. Never substitutes silent deterministic fallbacks.
  */
 export async function evaluateMilestone(input: EvaluateMilestoneInput): Promise<EvaluationReport> {
   // 1. Gather Evidence Items
@@ -248,21 +266,27 @@ export async function evaluateMilestone(input: EvaluateMilestoneInput): Promise<
     }
   }
 
-  // 2. Check for Gemini API Key
+  // Support explicit deterministic evaluation only when explicitly requested
+  if (input.mode === 'deterministic') {
+    return evaluateEvidenceDeterministically(input, evidenceItems, 'Explicit deterministic evaluation requested');
+  }
+
+  // 2. Check for Gemini API Key (unless custom aiClient is injected)
   const apiKey = input.geminiApiKey || process.env.GEMINI_API_KEY;
 
-  if (!apiKey) {
-    return evaluateEvidenceDeterministically(
-      input,
-      evidenceItems,
-      'Gemini API key not configured on server'
-    );
+  if (!input.aiClient && (!apiKey || apiKey.trim().length === 0)) {
+    throw {
+      code: 'GEMINI_CONFIG_MISSING',
+      message: 'Gemini API key is not configured on the server. Please configure GEMINI_API_KEY in the server environment.',
+      status: 500
+    } as EvaluatorError;
   }
 
   // 3. Call Gemini API with Structured Output Schema
-  try {
-    const ai = new GoogleGenAI({
-      apiKey,
+  const ai =
+    input.aiClient ||
+    new GoogleGenAI({
+      apiKey: apiKey!,
       httpOptions: {
         headers: {
           'User-Agent': 'aistudio-build'
@@ -270,7 +294,7 @@ export async function evaluateMilestone(input: EvaluateMilestoneInput): Promise<
       }
     });
 
-    const systemInstruction = `You are VeriCommit's Milestone Evidence Evaluator.
+  const systemInstruction = `You are VeriCommit's Milestone Evidence Evaluator.
 Your role is to produce an objective, evidence-based assessment comparing available software project evidence against pre-agreed milestone acceptance criteria.
 
 Strict Domain Rules:
@@ -287,163 +311,230 @@ Strict Domain Rules:
 
 Return a JSON object conforming strictly to the requested schema.`;
 
-    const userPrompt = JSON.stringify({
-      project_name: input.project_name,
-      repository_url: input.repository_url,
-      evidence_source: input.evidence_source,
-      milestone: input.milestone,
-      available_evidence: evidenceItems.map((e) => ({
-        id: e.id,
-        type: e.type,
-        title: e.title,
-        url: e.url,
-        summary: e.summary || ''
-      }))
-    });
+  const userPrompt = JSON.stringify({
+    project_name: input.project_name,
+    repository_url: input.repository_url,
+    evidence_source: input.evidence_source,
+    milestone: input.milestone,
+    available_evidence: evidenceItems.map((e) => ({
+      id: e.id,
+      type: e.type,
+      title: e.title,
+      url: e.url,
+      summary: e.summary || ''
+    }))
+  });
 
-    const generatePromise = ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: userPrompt,
-      config: {
-        systemInstruction,
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            overall_summary: {
-              type: Type.STRING,
-              description: 'Concise summary of progress against agreed criteria, noting gaps and uncertainty without bias.'
-            },
-            criteria_results: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  criterion: { type: Type.STRING },
-                  status: {
-                    type: Type.STRING,
-                    description: 'Evaluation status strictly matching allowed values: supported, insufficient_evidence, or uncertain.'
-                  },
-                  explanation: {
-                    type: Type.STRING,
-                    description: 'Objective explanation referencing available evidence or noting specific evidence gaps.'
-                  },
-                  evidence: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        type: { type: Type.STRING },
-                        title: { type: Type.STRING },
-                        url: { type: Type.STRING }
-                      },
-                      required: ['type', 'title', 'url']
-                    }
-                  }
+  const generatePromise = ai.models.generateContent({
+    model: 'gemini-3.8-flash',
+    contents: userPrompt,
+    config: {
+      systemInstruction,
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          overall_summary: {
+            type: Type.STRING,
+            description: 'Concise summary of progress against agreed criteria, noting gaps and uncertainty without bias.'
+          },
+          criteria_results: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                criterion: { type: Type.STRING },
+                status: {
+                  type: Type.STRING,
+                  description: 'Evaluation status strictly matching allowed values: supported, insufficient_evidence, or uncertain.'
                 },
-                required: ['criterion', 'status', 'explanation', 'evidence']
-              }
-            },
-            suggested_next_steps: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING }
-            },
-            limitations: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING }
+                explanation: {
+                  type: Type.STRING,
+                  description: 'Objective explanation referencing available evidence or noting specific evidence gaps.'
+                },
+                evidence: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      type: { type: Type.STRING },
+                      title: { type: Type.STRING },
+                      url: { type: Type.STRING }
+                    },
+                    required: ['type', 'title', 'url']
+                  }
+                }
+              },
+              required: ['criterion', 'status', 'explanation', 'evidence']
             }
           },
-          required: ['overall_summary', 'criteria_results', 'suggested_next_steps', 'limitations']
-        }
+          suggested_next_steps: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING }
+          },
+          limitations: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING }
+          }
+        },
+        required: ['overall_summary', 'criteria_results', 'suggested_next_steps', 'limitations']
       }
-    });
-
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error('Gemini API request timed out after 3500ms')), 3500);
-    });
-
-    const response = await Promise.race([generatePromise, timeoutPromise]);
-
-    const rawText = response.text;
-    if (!rawText) {
-      throw new Error('Gemini API returned empty response text.');
     }
+  });
 
-    const parsedJson = JSON.parse(rawText);
+  const timeoutMs = input.timeoutMs ?? 10000;
+  let timer: any;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject({
+        code: 'GEMINI_TIMEOUT',
+        message: `Gemini evaluation request timed out waiting for upstream response after ${timeoutMs}ms.`,
+        status: 504
+      } as EvaluatorError);
+    }, timeoutMs);
+    if (timer && typeof timer.unref === 'function') {
+      timer.unref();
+    }
+  });
 
-    // Normalize and enforce domain invariants
-    const normalizedCriteriaResults: CriterionResult[] = input.milestone.acceptance_criteria.map((critText) => {
-      const match = parsedJson.criteria_results?.find(
-        (r: any) => r.criterion?.trim().toLowerCase() === critText.trim().toLowerCase()
-      );
+  let response: any;
+  try {
+    response = await Promise.race([generatePromise, timeoutPromise]);
+  } catch (err: any) {
+    if (err && err.code && err.status) {
+      throw err;
+    }
+    if (err?.name === 'AbortError' || err?.message?.includes('timed out')) {
+      throw {
+        code: 'GEMINI_TIMEOUT',
+        message: 'Gemini evaluation request timed out waiting for upstream response.',
+        status: 504
+      } as EvaluatorError;
+    }
+    throw {
+      code: 'GEMINI_PROVIDER_ERROR',
+      message: `Gemini API evaluation failed: ${err?.message || 'Upstream provider error'}`,
+      status: 502
+    } as EvaluatorError;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 
-      if (match) {
-        let validStatus: CriterionStatus = 'insufficient_evidence';
-        if (['supported', 'insufficient_evidence', 'uncertain'].includes(match.status)) {
-          validStatus = match.status as CriterionStatus;
-        }
+  const rawText = response?.text;
+  if (!rawText || typeof rawText !== 'string' || rawText.trim().length === 0) {
+    throw {
+      code: 'GEMINI_INVALID_OUTPUT',
+      message: 'Gemini API returned an empty or invalid response text.',
+      status: 502
+    } as EvaluatorError;
+  }
 
-        // Sanitize evidence URLs to ensure no hallucinated URLs
-        const validEvidence = Array.isArray(match.evidence)
-          ? match.evidence
-              .filter((ev: any) => ev && typeof ev.url === 'string' && ev.url.startsWith('https://'))
-              .map((ev: any) => ({
+  let parsedJson: any;
+  try {
+    parsedJson = JSON.parse(rawText);
+  } catch (parseErr: any) {
+    throw {
+      code: 'GEMINI_INVALID_OUTPUT',
+      message: `Failed to parse Gemini response as JSON: ${parseErr?.message || 'Syntax error'}`,
+      status: 502
+    } as EvaluatorError;
+  }
+
+  if (!parsedJson || typeof parsedJson !== 'object' || !Array.isArray(parsedJson.criteria_results)) {
+    throw {
+      code: 'GEMINI_SCHEMA_VALIDATION_FAILED',
+      message: 'Gemini response does not conform to required evaluation schema (missing criteria_results array).',
+      status: 502
+    } as EvaluatorError;
+  }
+
+  // Grounding lookup map: strictly validate evidence against provided evidence items
+  const validEvidenceMap = new Map<string, EvidenceItem>();
+  for (const item of evidenceItems) {
+    if (item && item.url) {
+      validEvidenceMap.set(item.url.trim().toLowerCase(), item);
+    }
+  }
+
+  // Normalize and enforce domain invariants
+  const normalizedCriteriaResults: CriterionResult[] = input.milestone.acceptance_criteria.map((critText) => {
+    const match = parsedJson.criteria_results?.find(
+      (r: any) => r && r.criterion && r.criterion.trim().toLowerCase() === critText.trim().toLowerCase()
+    );
+
+    if (match) {
+      let validStatus: CriterionStatus = 'insufficient_evidence';
+      if (['supported', 'insufficient_evidence', 'uncertain'].includes(match.status)) {
+        validStatus = match.status as CriterionStatus;
+      }
+
+      // Filter evidence to ONLY items that exist in the provided repository evidence
+      const validEvidence = Array.isArray(match.evidence)
+        ? match.evidence
+            .filter((ev: any) => {
+              if (!ev || typeof ev.url !== 'string') return false;
+              return validEvidenceMap.has(ev.url.trim().toLowerCase());
+            })
+            .map((ev: any) => {
+              const matchedItem = validEvidenceMap.get(ev.url.trim().toLowerCase())!;
+              return {
                 type: (['pull_request', 'commit', 'release', 'test_run', 'document'].includes(ev.type)
                   ? ev.type
-                  : 'commit') as EvidenceType,
-                title: String(ev.title || 'Referenced Artifact'),
-                url: String(ev.url)
-              }))
-          : [];
+                  : matchedItem.type) as EvidenceType,
+                title: String(matchedItem.title || ev.title || 'Referenced Artifact'),
+                url: matchedItem.url
+              };
+            })
+        : [];
 
-        // Invariant: If insufficient_evidence, evidence array must be empty
-        if (validStatus === 'insufficient_evidence') {
-          validEvidence.length = 0;
-        }
+      let explanation = String(match.explanation || 'Evaluated against available repository artifacts.');
 
-        return {
-          criterion: critText,
-          status: validStatus,
-          explanation: String(match.explanation || 'Evaluated against available repository artifacts.'),
-          evidence: validEvidence
-        };
+      // Rule: If model claimed 'supported' without any valid grounded evidence, downgrade to 'insufficient_evidence'
+      if (validStatus === 'supported' && validEvidence.length === 0) {
+        validStatus = 'insufficient_evidence';
+        explanation = 'Model reported supported status, but no valid repository evidence artifacts were cited to demonstrate this criterion.';
+      }
+
+      // Invariant: If insufficient_evidence, evidence array must be empty
+      if (validStatus === 'insufficient_evidence') {
+        validEvidence.length = 0;
       }
 
       return {
         criterion: critText,
-        status: 'insufficient_evidence',
-        explanation: 'The available repository evidence does not demonstrate this acceptance criterion.',
-        evidence: []
+        status: validStatus,
+        explanation,
+        evidence: validEvidence
       };
-    });
-
-    const reportLimitations = Array.isArray(parsedJson.limitations) && parsedJson.limitations.length > 0
-      ? parsedJson.limitations
-      : [
-          'Repository activity alone does not prove production runtime stability.',
-          'Assessed within retrieved evidence boundaries.'
-        ];
+    }
 
     return {
-      evaluation_id: `eval_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      project_name: input.project_name,
-      milestone_title: input.milestone.title,
-      overall_summary: String(parsedJson.overall_summary || 'Evidence evaluation completed against pre-agreed criteria.'),
-      criteria_results: normalizedCriteriaResults,
-      suggested_next_steps: Array.isArray(parsedJson.suggested_next_steps)
-        ? parsedJson.suggested_next_steps
-        : ['Review findings with the authorized human reviewer.'],
-      limitations: reportLimitations,
-      human_review_required: true,
-      evaluated_at: new Date().toISOString(),
-      evidence_source: input.evidence_source
+      criterion: critText,
+      status: 'insufficient_evidence',
+      explanation: 'The available repository evidence does not demonstrate this acceptance criterion.',
+      evidence: []
     };
-  } catch (geminiError: any) {
-    console.warn('Gemini API invocation error, using deterministic evaluation fallback:', geminiError?.message || geminiError);
-    return evaluateEvidenceDeterministically(
-      input,
-      evidenceItems,
-      `Gemini API error: ${geminiError?.message || 'Upstream service unavailable'}`
-    );
-  }
+  });
+
+  const reportLimitations = Array.isArray(parsedJson.limitations) && parsedJson.limitations.length > 0
+    ? parsedJson.limitations
+    : [
+        'Repository activity alone does not prove production runtime stability.',
+        'Assessed within retrieved evidence boundaries.'
+      ];
+
+  return {
+    evaluation_id: `eval_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+    project_name: input.project_name,
+    milestone_title: input.milestone.title,
+    overall_summary: String(parsedJson.overall_summary || 'Evidence evaluation completed against pre-agreed criteria.'),
+    criteria_results: normalizedCriteriaResults,
+    suggested_next_steps: Array.isArray(parsedJson.suggested_next_steps)
+      ? parsedJson.suggested_next_steps
+      : ['Review findings with the authorized human reviewer.'],
+    limitations: reportLimitations,
+    human_review_required: true,
+    evaluated_at: new Date().toISOString(),
+    evidence_source: input.evidence_source
+  };
 }

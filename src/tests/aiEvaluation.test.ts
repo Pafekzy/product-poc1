@@ -1,11 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import {
   evaluateEvidenceDeterministically,
+  evaluateMilestone,
   SAMPLE_EVIDENCE_ITEMS,
   EvaluateMilestoneInput
 } from '../server/evaluator';
 import { handleApiRequest, validateEvaluationRequest } from '../server/api';
-import { createSignedFirebaseToken, testKeySet } from './testHelpers';
+import { createSignedFirebaseToken, testKeySet, createMockGeminiClient } from './testHelpers';
 import { EvidenceItem } from '../types';
 
 describe('AI Milestone Evaluation Engine — Domain Rules & Invariants', () => {
@@ -211,7 +212,8 @@ describe('API Boundary Validation & Protocol Conformance (/api/v1/evaluations)',
       evidence_source: 'sample'
     });
 
-    await handleApiRequest(mockReq, mockRes, url, validBody, testKeySet);
+    const mockAiClient = createMockGeminiClient();
+    await handleApiRequest(mockReq, mockRes, url, validBody, testKeySet, undefined, mockAiClient);
     expect(statusCode).toBe(200);
 
     const parsed = JSON.parse(responseBody);
@@ -277,7 +279,8 @@ describe('API Boundary Validation & Protocol Conformance (/api/v1/evaluations)',
       evidence_source: 'sample'
     });
 
-    await handleApiRequest(mockReq, mockRes, url, validBody, testKeySet);
+    const mockAiClient = createMockGeminiClient();
+    await handleApiRequest(mockReq, mockRes, url, validBody, testKeySet, undefined, mockAiClient);
     expect(statusCode).toBe(200);
     const parsed = JSON.parse(responseBody);
     expect(parsed.evaluation_id).toMatch(/^eval_/);
@@ -319,3 +322,217 @@ describe('API Boundary Validation & Protocol Conformance (/api/v1/evaluations)',
     expect(['UNAUTHORIZED', 'INVALID_TOKEN', 'FORGED_SIGNATURE']).toContain(parsed.error.code);
   });
 });
+
+describe('Gemini Evaluation Engine — Error Handling & Test Isolation', () => {
+  const baseMilestoneInput: EvaluateMilestoneInput = {
+    project_name: 'Decentralized Tooling',
+    repository_url: 'https://github.com/example/community-tools',
+    milestone: {
+      title: 'Registration feature',
+      description: 'Registration form and tests',
+      acceptance_criteria: [
+        'A user can submit the registration form and receive account confirmation.',
+        'Invalid input produces clear, understandable validation errors preventing submission.'
+      ]
+    },
+    evidence_source: 'sample'
+  };
+
+  it('rejects evaluation when GEMINI_API_KEY is missing with 500 GEMINI_CONFIG_MISSING', async () => {
+    const originalEnv = process.env.GEMINI_API_KEY;
+    try {
+      delete process.env.GEMINI_API_KEY;
+
+      await expect(
+        evaluateMilestone({
+          ...baseMilestoneInput,
+          geminiApiKey: ''
+        })
+      ).rejects.toMatchObject({
+        code: 'GEMINI_CONFIG_MISSING',
+        status: 500
+      });
+    } finally {
+      process.env.GEMINI_API_KEY = originalEnv;
+    }
+  });
+
+  it('rejects evaluation when Gemini API request times out with 504 GEMINI_TIMEOUT', async () => {
+    const slowMockClient = createMockGeminiClient({ delayMs: 150 });
+
+    await expect(
+      evaluateMilestone({
+        ...baseMilestoneInput,
+        aiClient: slowMockClient,
+        timeoutMs: 30
+      })
+    ).rejects.toMatchObject({
+      code: 'GEMINI_TIMEOUT',
+      status: 504
+    });
+  });
+
+  it('rejects evaluation when Gemini provider throws an error with 502 GEMINI_PROVIDER_ERROR', async () => {
+    const failingClient = createMockGeminiClient({
+      throwError: new Error('Google GenAI upstream service unavailable (503)')
+    });
+
+    await expect(
+      evaluateMilestone({
+        ...baseMilestoneInput,
+        aiClient: failingClient
+      })
+    ).rejects.toMatchObject({
+      code: 'GEMINI_PROVIDER_ERROR',
+      status: 502
+    });
+  });
+
+  it('rejects evaluation when Gemini returns empty or non-JSON output with 502 GEMINI_INVALID_OUTPUT', async () => {
+    const malformedClient = createMockGeminiClient({
+      responseText: 'NOT_VALID_JSON{oops'
+    });
+
+    await expect(
+      evaluateMilestone({
+        ...baseMilestoneInput,
+        aiClient: malformedClient
+      })
+    ).rejects.toMatchObject({
+      code: 'GEMINI_INVALID_OUTPUT',
+      status: 502
+    });
+  });
+
+  it('rejects evaluation when Gemini returns schema-invalid output (missing criteria_results) with 502 GEMINI_SCHEMA_VALIDATION_FAILED', async () => {
+    const invalidSchemaClient = createMockGeminiClient({
+      responseText: JSON.stringify({
+        overall_summary: 'Missing criteria array',
+        limitations: []
+      })
+    });
+
+    await expect(
+      evaluateMilestone({
+        ...baseMilestoneInput,
+        aiClient: invalidSchemaClient
+      })
+    ).rejects.toMatchObject({
+      code: 'GEMINI_SCHEMA_VALIDATION_FAILED',
+      status: 502
+    });
+  });
+
+  it('filters out fabricated evidence URLs not present in retrieved repository evidence', async () => {
+    const hallucinatingClient = createMockGeminiClient({
+      responseText: JSON.stringify({
+        overall_summary: 'Report with hallucinated evidence',
+        criteria_results: [
+          {
+            criterion: 'A user can submit the registration form and receive account confirmation.',
+            status: 'supported',
+            explanation: 'Verified via PR #12 and fabricated fake commit.',
+            evidence: [
+              {
+                type: 'pull_request',
+                title: 'PR #12: Add member registration form and confirmation dialog',
+                url: 'https://github.com/example/community-tools/pull/12'
+              },
+              {
+                type: 'commit',
+                title: 'Hallucinated commit',
+                url: 'https://github.com/example/community-tools/commit/fabricated_sha_not_in_evidence'
+              }
+            ]
+          },
+          {
+            criterion: 'Invalid input produces clear, understandable validation errors preventing submission.',
+            status: 'supported',
+            explanation: 'Only fabricated evidence cited.',
+            evidence: [
+              {
+                type: 'commit',
+                title: 'Another fabricated commit',
+                url: 'https://github.com/hacker/fake-repo/commit/1234567'
+              }
+            ]
+          }
+        ],
+        suggested_next_steps: ['Step 1'],
+        limitations: ['Limitation 1']
+      })
+    });
+
+    const report = await evaluateMilestone({
+      ...baseMilestoneInput,
+      aiClient: hallucinatingClient
+    });
+
+    // First criterion: PR 12 is kept, fabricated commit is stripped
+    expect(report.criteria_results[0].status).toBe('supported');
+    expect(report.criteria_results[0].evidence).toHaveLength(1);
+    expect(report.criteria_results[0].evidence[0].url).toBe('https://github.com/example/community-tools/pull/12');
+
+    // Second criterion: only fabricated evidence was cited -> downgraded to insufficient_evidence with empty evidence array
+    expect(report.criteria_results[1].status).toBe('insufficient_evidence');
+    expect(report.criteria_results[1].evidence).toEqual([]);
+    expect(report.criteria_results[1].explanation).toContain('no valid repository evidence');
+  });
+
+  it('confirms that failed Gemini requests NEVER return successful deterministic fallback', async () => {
+    const failingClient = createMockGeminiClient({
+      throwError: new Error('Gemini API quota exhausted')
+    });
+
+    // Must reject rather than returning a report
+    await expect(
+      evaluateMilestone({
+        ...baseMilestoneInput,
+        aiClient: failingClient
+      })
+    ).rejects.toThrow();
+  });
+
+  it('server /api/v1/evaluations endpoint propagates provider error status codes (502, 504, 500)', async () => {
+    let statusCode = 0;
+    let responseBody = '';
+
+    const mockReq: any = { method: 'POST', headers: {} };
+    const mockRes: any = {
+      setHeader: () => {},
+      set statusCode(val: number) {
+        statusCode = val;
+      },
+      end: (data: string) => {
+        responseBody = data;
+      }
+    };
+
+    const url = new URL('http://localhost:3000/api/v1/evaluations');
+    const validBody = JSON.stringify({
+      project_name: 'Community Tools',
+      repository_url: 'https://github.com/example/community-tools',
+      milestone: {
+        title: 'Title',
+        description: 'Desc',
+        acceptance_criteria: ['Criterion']
+      },
+      evidence_source: 'sample'
+    });
+
+    // 1. Test 502 on provider failure
+    const failingClient = createMockGeminiClient({
+      throwError: new Error('Upstream 503 Service Unavailable')
+    });
+    await handleApiRequest(mockReq, mockRes, url, validBody, testKeySet, undefined, failingClient);
+    expect(statusCode).toBe(502);
+    expect(JSON.parse(responseBody).error.code).toBe('GEMINI_PROVIDER_ERROR');
+
+    // 2. Test 502 on invalid JSON output
+    const malformedClient = createMockGeminiClient({ responseText: 'invalid-json' });
+    await handleApiRequest(mockReq, mockRes, url, validBody, testKeySet, undefined, malformedClient);
+    expect(statusCode).toBe(502);
+    expect(JSON.parse(responseBody).error.code).toBe('GEMINI_INVALID_OUTPUT');
+  });
+});
+

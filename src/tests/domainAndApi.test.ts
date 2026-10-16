@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { validateEvaluationRequest, validateDecisionRequest, handleApiRequest } from '../server/api';
 import { verifyFirebaseIdToken, checkAgreementAuthorization } from '../server/auth';
 import { AuditLogEntry } from '../types';
-import { initTestCrypto, createSignedFirebaseToken, testKeySet } from './testHelpers';
+import { initTestCrypto, createSignedFirebaseToken, testKeySet, createMockGeminiClient } from './testHelpers';
 import { initialFundingAgreements } from '../data/mockData';
 
 beforeAll(async () => {
@@ -312,7 +312,8 @@ describe('VeriCommit Evaluation API & Domain Rules', () => {
       evidence_source: 'sample'
     });
 
-    await handleApiRequest(mockReq, mockRes, url, validBody, testKeySet);
+    const mockAiClient = createMockGeminiClient();
+    await handleApiRequest(mockReq, mockRes, url, validBody, testKeySet, undefined, mockAiClient);
     expect(statusCode).toBe(200);
     const parsed = JSON.parse(responseBody);
     expect(parsed.evaluation_id).toMatch(/^eval_/);

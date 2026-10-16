@@ -140,7 +140,8 @@ export async function handleApiRequest(
   url: URL,
   rawBody: string,
   customKeySet?: JWTVerifyGetKey,
-  customFetchFn?: typeof fetch
+  customFetchFn?: typeof fetch,
+  customAiClient?: any
 ): Promise<boolean> {
   res.setHeader('Content-Type', 'application/json');
 
@@ -292,7 +293,8 @@ export async function handleApiRequest(
         repository_url: parsed.repository_url,
         milestone: parsed.milestone,
         evidence_source: parsed.evidence_source,
-        fetchFn: customFetchFn
+        fetchFn: customFetchFn,
+        aiClient: customAiClient
       });
 
       res.statusCode = 200;
