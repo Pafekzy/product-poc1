@@ -11,9 +11,14 @@ const apiPlugin = (): Plugin => ({
       if (url.pathname.startsWith('/api/')) {
         let rawBody = '';
         req.on('data', chunk => { rawBody += chunk; });
-        req.on('end', () => {
-          const handled = handleApiRequest(req, res, url, rawBody);
-          if (!handled) next();
+        req.on('end', async () => {
+          try {
+            const handled = await handleApiRequest(req, res, url, rawBody);
+            if (!handled) next();
+          } catch (err) {
+            res.statusCode = 500;
+            res.end(JSON.stringify({ error: { code: 'INTERNAL_SERVER_ERROR', message: String(err) } }));
+          }
         });
       } else {
         next();

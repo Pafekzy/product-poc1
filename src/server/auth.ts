@@ -1,3 +1,4 @@
+import { createRemoteJWKSet, jwtVerify, JWTVerifyGetKey } from 'jose';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { FundingAgreement } from '../types';
 
@@ -12,16 +13,37 @@ export interface TokenVerificationResult {
   valid: boolean;
   user?: AuthenticatedUser;
   error?: {
-    code: 'UNAUTHORIZED' | 'INVALID_TOKEN' | 'TOKEN_EXPIRED' | 'INVALID_ISSUER' | 'INVALID_AUDIENCE';
+    code: 'UNAUTHORIZED' | 'INVALID_TOKEN' | 'FORGED_SIGNATURE' | 'TOKEN_EXPIRED' | 'INVALID_ISSUER' | 'INVALID_AUDIENCE';
     message: string;
   };
 }
 
+// Google's official public JWKS endpoint for Firebase ID Tokens
+const GOOGLE_FIREBASE_JWKS_URL = 'https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com';
+
+let googleJwks: JWTVerifyGetKey | null = null;
+
+function getGoogleJwks(): JWTVerifyGetKey {
+  if (!googleJwks) {
+    googleJwks = createRemoteJWKSet(new URL(GOOGLE_FIREBASE_JWKS_URL), {
+      cacheMaxAge: 3600000, // 1 hour caching
+      cooldownDuration: 30000 // 30 sec cooldown on retries
+    });
+  }
+  return googleJwks;
+}
+
 /**
- * Server-side JWT parser and claim verifier for Firebase ID Tokens.
- * Validates expiration, structure, issuer, and audience against the provisioned project.
+ * Cryptographically verifies a Firebase ID Token using official RS256 public key verification.
+ * Validates cryptographic signature, issuer, audience, and expiration.
+ *
+ * @param authHeader The incoming HTTP Authorization header ('Bearer <token>')
+ * @param customKeySet Optional custom JWKS / KeyResolver (utilized for deterministic integration tests)
  */
-export function verifyFirebaseIdToken(authHeader: string | undefined): TokenVerificationResult {
+export async function verifyFirebaseIdToken(
+  authHeader: string | undefined,
+  customKeySet?: JWTVerifyGetKey
+): Promise<TokenVerificationResult> {
   if (!authHeader || typeof authHeader !== 'string') {
     return {
       valid: false,
@@ -55,83 +77,100 @@ export function verifyFirebaseIdToken(authHeader: string | undefined): TokenVeri
     };
   }
 
-  let payload: any;
+  const keySet = customKeySet || getGoogleJwks();
+  const expectedAudience = firebaseConfig.projectId;
+  const expectedIssuer = `https://securetoken.google.com/${expectedAudience}`;
+
   try {
-    const base64 = tokenParts[1].replace(/-/g, '+').replace(/_/g, '/');
-    const json = Buffer.from(base64, 'base64').toString('utf8');
-    payload = JSON.parse(json);
-  } catch {
-    return {
-      valid: false,
-      error: {
-        code: 'INVALID_TOKEN',
-        message: 'Could not parse token payload as JSON.'
-      }
-    };
-  }
+    const { payload } = await jwtVerify(token, keySet, {
+      issuer: expectedIssuer,
+      audience: expectedAudience,
+      algorithms: ['RS256']
+    });
 
-  const nowInSec = Math.floor(Date.now() / 1000);
-
-  // 1. Check expiration
-  if (typeof payload.exp !== 'number' || payload.exp <= nowInSec) {
-    return {
-      valid: false,
-      error: {
-        code: 'TOKEN_EXPIRED',
-        message: 'Authentication token has expired. Please re-authenticate.'
-      }
-    };
-  }
-
-  // 2. Check audience (must match Firebase Project ID)
-  const expectedAud = firebaseConfig.projectId;
-  if (payload.aud !== expectedAud) {
-    return {
-      valid: false,
-      error: {
-        code: 'INVALID_AUDIENCE',
-        message: `Token audience ${payload.aud} does not match expected project ${expectedAud}.`
-      }
-    };
-  }
-
-  // 3. Check issuer
-  const expectedIss = `https://securetoken.google.com/${expectedAud}`;
-  if (payload.iss !== expectedIss) {
-    return {
-      valid: false,
-      error: {
-        code: 'INVALID_ISSUER',
-        message: `Token issuer ${payload.iss} does not match expected issuer ${expectedIss}.`
-      }
-    };
-  }
-
-  // 4. Check subject UID
-  if (!payload.sub || typeof payload.sub !== 'string') {
-    return {
-      valid: false,
-      error: {
-        code: 'INVALID_TOKEN',
-        message: 'Token payload missing subject identifier (sub).'
-      }
-    };
-  }
-
-  return {
-    valid: true,
-    user: {
-      uid: payload.sub,
-      email: payload.email,
-      email_verified: Boolean(payload.email_verified),
-      name: payload.name
+    if (!payload.sub || typeof payload.sub !== 'string') {
+      return {
+        valid: false,
+        error: {
+          code: 'INVALID_TOKEN',
+          message: 'Token payload missing subject identifier (sub).'
+        }
+      };
     }
-  };
+
+    return {
+      valid: true,
+      user: {
+        uid: payload.sub,
+        email: typeof payload.email === 'string' ? payload.email : undefined,
+        email_verified: Boolean(payload.email_verified),
+        name: typeof payload.name === 'string' ? payload.name : undefined
+      }
+    };
+  } catch (err: any) {
+    const errCode = err.code || '';
+    const errMessage = err.message || '';
+
+    if (errCode === 'ERR_JWT_EXPIRED' || errMessage.includes('expired')) {
+      return {
+        valid: false,
+        error: {
+          code: 'TOKEN_EXPIRED',
+          message: 'Authentication token has expired. Please re-authenticate.'
+        }
+      };
+    }
+
+    if (errCode === 'ERR_JWT_CLAIM_VALIDATION_FAILED') {
+      if (err.claim === 'aud' || errMessage.includes('audience')) {
+        return {
+          valid: false,
+          error: {
+            code: 'INVALID_AUDIENCE',
+            message: `Token audience does not match expected Firebase project (${expectedAudience}).`
+          }
+        };
+      }
+      if (err.claim === 'iss' || errMessage.includes('issuer')) {
+        return {
+          valid: false,
+          error: {
+            code: 'INVALID_ISSUER',
+            message: `Token issuer does not match expected Firebase issuer (${expectedIssuer}).`
+          }
+        };
+      }
+    }
+
+    // Cryptographic signature verification failure
+    if (
+      errCode === 'ERR_JWS_SIGNATURE_VERIFICATION_FAILED' ||
+      errCode === 'ERR_JWKS_NO_MATCHING_KEY' ||
+      errMessage.includes('signature') ||
+      errMessage.includes('key')
+    ) {
+      return {
+        valid: false,
+        error: {
+          code: 'FORGED_SIGNATURE',
+          message: 'Cryptographic token signature verification failed. Forged or untrusted token rejected.'
+        }
+      };
+    }
+
+    return {
+      valid: false,
+      error: {
+        code: 'INVALID_TOKEN',
+        message: `Token verification failed: ${errMessage}`
+      }
+    };
+  }
 }
 
 /**
  * Enforces VeriCommit's domain access boundaries:
- * - A user may only read/write an agreement if they are the responsible Grantor or Grantee.
+ * - A user may only read/write an agreement if their authenticated UID or verified email matches.
  * - Non-participants cannot view or modify the agreement (Cross-agreement isolation).
  * - Only the Grantor may perform consequential approval actions.
  */

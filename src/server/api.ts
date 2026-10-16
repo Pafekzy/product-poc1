@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import { verifyFirebaseIdToken, checkAgreementAuthorization } from './auth';
 import { HumanDecision } from '../types';
 import { initialFundingAgreements } from '../data/mockData';
+import type { JWTVerifyGetKey } from 'jose';
 
 export interface EvaluationRequest {
   agreement_id?: string;
@@ -131,7 +132,13 @@ export function validateDecisionRequest(body: any): ValidationErrorResult {
   return { valid: true };
 }
 
-export function handleApiRequest(req: IncomingMessage, res: ServerResponse, url: URL, rawBody: string): boolean {
+export async function handleApiRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  rawBody: string,
+  customKeySet?: JWTVerifyGetKey
+): Promise<boolean> {
   res.setHeader('Content-Type', 'application/json');
 
   // Public Healthcheck
@@ -145,7 +152,7 @@ export function handleApiRequest(req: IncomingMessage, res: ServerResponse, url:
   if (url.pathname.startsWith('/api/v1/agreements/') && req.method === 'GET') {
     const agreementId = url.pathname.replace('/api/v1/agreements/', '').trim();
     const authHeader = req.headers['authorization'];
-    const authResult = verifyFirebaseIdToken(authHeader);
+    const authResult = await verifyFirebaseIdToken(authHeader, customKeySet);
 
     if (!authResult.valid || !authResult.user) {
       res.statusCode = 401;
@@ -175,7 +182,7 @@ export function handleApiRequest(req: IncomingMessage, res: ServerResponse, url:
   // Protected: Human Decision Recording
   if (url.pathname === '/api/v1/decisions' && req.method === 'POST') {
     const authHeader = req.headers['authorization'];
-    const authResult = verifyFirebaseIdToken(authHeader);
+    const authResult = await verifyFirebaseIdToken(authHeader, customKeySet);
 
     if (!authResult.valid || !authResult.user) {
       res.statusCode = 401;
@@ -203,6 +210,19 @@ export function handleApiRequest(req: IncomingMessage, res: ServerResponse, url:
     if (!agreement) {
       res.statusCode = 404;
       res.end(JSON.stringify({ error: { code: 'AGREEMENT_NOT_FOUND', message: `Agreement ${parsed.agreement_id} not found.` } }));
+      return true;
+    }
+
+    // Verify milestone belongs to the designated agreement
+    const milestoneInAgreement = agreement.milestones.some(m => m.id === parsed.milestone_id);
+    if (!milestoneInAgreement) {
+      res.statusCode = 400;
+      res.end(JSON.stringify({
+        error: {
+          code: 'MILESTONE_NOT_IN_AGREEMENT',
+          message: `Milestone ${parsed.milestone_id} does not belong to agreement ${parsed.agreement_id}.`
+        }
+      }));
       return true;
     }
 
@@ -237,9 +257,9 @@ export function handleApiRequest(req: IncomingMessage, res: ServerResponse, url:
   if (url.pathname === '/api/v1/evaluations' && req.method === 'POST') {
     const authHeader = req.headers['authorization'];
     
-    // If auth header is provided, enforce strict token verification
+    // If auth header is provided, enforce cryptographic token verification
     if (authHeader) {
-      const authResult = verifyFirebaseIdToken(authHeader);
+      const authResult = await verifyFirebaseIdToken(authHeader, customKeySet);
       if (!authResult.valid) {
         res.statusCode = 401;
         res.end(JSON.stringify({ error: authResult.error }));

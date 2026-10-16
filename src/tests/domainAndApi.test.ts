@@ -1,60 +1,73 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import { validateEvaluationRequest, validateDecisionRequest, handleApiRequest } from '../server/api';
 import { verifyFirebaseIdToken, checkAgreementAuthorization } from '../server/auth';
 import { AuditLogEntry } from '../types';
-import { createMockFirebaseToken } from './testHelpers';
+import { initTestCrypto, createSignedFirebaseToken, testKeySet } from './testHelpers';
 import { initialFundingAgreements } from '../data/mockData';
 
-describe('Server-Side Authentication & Token Verification', () => {
-  it('rejects requests missing an Authorization header', () => {
-    const res = verifyFirebaseIdToken(undefined);
+beforeAll(async () => {
+  await initTestCrypto();
+});
+
+describe('Cryptographic Token Verification (RS256)', () => {
+  it('rejects requests missing an Authorization header with UNAUTHORIZED', async () => {
+    const res = await verifyFirebaseIdToken(undefined, testKeySet);
     expect(res.valid).toBe(false);
     expect(res.error?.code).toBe('UNAUTHORIZED');
   });
 
-  it('rejects requests with malformed Authorization format', () => {
-    const res = verifyFirebaseIdToken('Basic dXNlcjpwYXNz');
+  it('rejects requests with malformed Authorization format with UNAUTHORIZED', async () => {
+    const res = await verifyFirebaseIdToken('Basic dXNlcjpwYXNz', testKeySet);
     expect(res.valid).toBe(false);
     expect(res.error?.code).toBe('UNAUTHORIZED');
   });
 
-  it('rejects tokens that do not contain 3 JWT segments', () => {
-    const res = verifyFirebaseIdToken('Bearer not-a-valid-jwt-token');
+  it('rejects tokens that do not contain 3 JWT segments with INVALID_TOKEN', async () => {
+    const res = await verifyFirebaseIdToken('Bearer not-a-valid-jwt-token', testKeySet);
     expect(res.valid).toBe(false);
     expect(res.error?.code).toBe('INVALID_TOKEN');
   });
 
-  it('rejects expired Firebase tokens with TOKEN_EXPIRED', () => {
-    const pastTime = Math.floor(Date.now() / 1000) - 300; // 5 mins ago
-    const expiredToken = createMockFirebaseToken({ exp: pastTime });
-    const res = verifyFirebaseIdToken(`Bearer ${expiredToken}`);
+  it('rejects forged tokens signed by an untrusted key with FORGED_SIGNATURE', async () => {
+    // Cryptographically signed with foreign key not in the trusted JWKS
+    const forgedToken = await createSignedFirebaseToken({ signWithForeignKey: true });
+    const res = await verifyFirebaseIdToken(`Bearer ${forgedToken}`, testKeySet);
+    expect(res.valid).toBe(false);
+    expect(res.error?.code).toBe('FORGED_SIGNATURE');
+    expect(res.error?.message).toContain('signature verification failed');
+  });
+
+  it('rejects expired Firebase tokens with TOKEN_EXPIRED', async () => {
+    const expiredToken = await createSignedFirebaseToken({ expOffsetSeconds: -300 });
+    const res = await verifyFirebaseIdToken(`Bearer ${expiredToken}`, testKeySet);
     expect(res.valid).toBe(false);
     expect(res.error?.code).toBe('TOKEN_EXPIRED');
   });
 
-  it('rejects tokens issued for a different project audience with INVALID_AUDIENCE', () => {
-    const wrongAudToken = createMockFirebaseToken({ aud: 'different-fake-project-id' });
-    const res = verifyFirebaseIdToken(`Bearer ${wrongAudToken}`);
+  it('rejects tokens issued for a different project audience with INVALID_AUDIENCE', async () => {
+    const wrongAudToken = await createSignedFirebaseToken({ aud: 'wrong-foreign-project-id' });
+    const res = await verifyFirebaseIdToken(`Bearer ${wrongAudToken}`, testKeySet);
     expect(res.valid).toBe(false);
     expect(res.error?.code).toBe('INVALID_AUDIENCE');
   });
 
-  it('rejects tokens with an invalid issuer with INVALID_ISSUER', () => {
-    const wrongIssToken = createMockFirebaseToken({ iss: 'https://evil-auth.example.com' });
-    const res = verifyFirebaseIdToken(`Bearer ${wrongIssToken}`);
+  it('rejects tokens with an invalid issuer with INVALID_ISSUER', async () => {
+    const wrongIssToken = await createSignedFirebaseToken({ iss: 'https://evil-auth.example.com' });
+    const res = await verifyFirebaseIdToken(`Bearer ${wrongIssToken}`, testKeySet);
     expect(res.valid).toBe(false);
     expect(res.error?.code).toBe('INVALID_ISSUER');
   });
 
-  it('successfully verifies a valid Firebase token and extracts authenticated identity', () => {
-    const validToken = createMockFirebaseToken({
+  it('successfully verifies a valid cryptographic RS256 token and extracts authenticated identity', async () => {
+    const validToken = await createSignedFirebaseToken({
       uid: 'user-grantor-777',
       email: 'elena@foundation.org'
     });
-    const res = verifyFirebaseIdToken(`Bearer ${validToken}`);
+    const res = await verifyFirebaseIdToken(`Bearer ${validToken}`, testKeySet);
     expect(res.valid).toBe(true);
     expect(res.user?.uid).toBe('user-grantor-777');
     expect(res.user?.email).toBe('elena@foundation.org');
+    expect(res.user?.name).toBe('Elena Vance');
   });
 });
 
@@ -90,7 +103,7 @@ describe('Funding Agreement Access Boundaries & RBAC', () => {
   });
 });
 
-describe('Human Decision Validation & Recording API', () => {
+describe('API Boundary Security & Protected Endpoints', () => {
   it('validates a complete decision payload with required reasoning', () => {
     const valid = validateDecisionRequest({
       agreement_id: 'fa-8041',
@@ -123,7 +136,7 @@ describe('Human Decision Validation & Recording API', () => {
     expect(invalid.error?.code).toBe('INVALID_REQUEST');
   });
 
-  it('server rejects unauthenticated decision submission with 401', () => {
+  it('server rejects unauthenticated decision submission with 401 UNAUTHORIZED', async () => {
     let statusCode = 0;
     let responseBody = '';
 
@@ -135,17 +148,38 @@ describe('Human Decision Validation & Recording API', () => {
     };
 
     const url = new URL('http://localhost:3000/api/v1/decisions');
-    const handled = handleApiRequest(mockReq, mockRes, url, JSON.stringify({}));
+    const handled = await handleApiRequest(mockReq, mockRes, url, JSON.stringify({}), testKeySet);
     expect(handled).toBe(true);
     expect(statusCode).toBe(401);
     expect(JSON.parse(responseBody).error.code).toBe('UNAUTHORIZED');
   });
 
-  it('server rejects Grantee decision submission with 403 FORBIDDEN_GRANTOR_ONLY', () => {
+  it('server rejects forged token on decision endpoint with 401 FORGED_SIGNATURE', async () => {
     let statusCode = 0;
     let responseBody = '';
 
-    const granteeToken = createMockFirebaseToken({ uid: 'ge-202', email: 'builder@grantee.org' });
+    const forgedToken = await createSignedFirebaseToken({ signWithForeignKey: true });
+    const mockReq: any = {
+      method: 'POST',
+      headers: { authorization: `Bearer ${forgedToken}` }
+    };
+    const mockRes: any = {
+      setHeader: () => {},
+      set statusCode(val: number) { statusCode = val; },
+      end: (data: string) => { responseBody = data; }
+    };
+
+    const url = new URL('http://localhost:3000/api/v1/decisions');
+    await handleApiRequest(mockReq, mockRes, url, JSON.stringify({}), testKeySet);
+    expect(statusCode).toBe(401);
+    expect(JSON.parse(responseBody).error.code).toBe('FORGED_SIGNATURE');
+  });
+
+  it('server rejects Grantee decision submission with 403 FORBIDDEN_GRANTOR_ONLY', async () => {
+    let statusCode = 0;
+    let responseBody = '';
+
+    const granteeToken = await createSignedFirebaseToken({ uid: 'ge-202', email: 'builder@grantee.org' });
     const mockReq: any = {
       method: 'POST',
       headers: { authorization: `Bearer ${granteeToken}` }
@@ -164,17 +198,46 @@ describe('Human Decision Validation & Recording API', () => {
       reasoning: 'Grantee trying to approve their own milestone'
     });
 
-    handleApiRequest(mockReq, mockRes, url, payload);
+    await handleApiRequest(mockReq, mockRes, url, payload, testKeySet);
     expect(statusCode).toBe(403);
     const parsed = JSON.parse(responseBody);
     expect(parsed.error.code).toBe('FORBIDDEN_GRANTOR_ONLY');
   });
 
-  it('server accepts valid Grantor decision submission with 201 Created', () => {
+  it('server rejects milestone ID that does not belong to agreement with 400 MILESTONE_NOT_IN_AGREEMENT', async () => {
     let statusCode = 0;
     let responseBody = '';
 
-    const grantorToken = createMockFirebaseToken({ uid: 'g-101', email: 'director@grantor.org' });
+    const grantorToken = await createSignedFirebaseToken({ uid: 'g-101', email: 'director@grantor.org' });
+    const mockReq: any = {
+      method: 'POST',
+      headers: { authorization: `Bearer ${grantorToken}` }
+    };
+    const mockRes: any = {
+      setHeader: () => {},
+      set statusCode(val: number) { statusCode = val; },
+      end: (data: string) => { responseBody = data; }
+    };
+
+    const url = new URL('http://localhost:3000/api/v1/decisions');
+    const payload = JSON.stringify({
+      agreement_id: 'fa-8041',
+      milestone_id: 'ms-foreign-999', // manipulation attack
+      status: 'approved',
+      reasoning: 'Trying to record a decision on a milestone belonging to another agreement.'
+    });
+
+    await handleApiRequest(mockReq, mockRes, url, payload, testKeySet);
+    expect(statusCode).toBe(400);
+    const parsed = JSON.parse(responseBody);
+    expect(parsed.error.code).toBe('MILESTONE_NOT_IN_AGREEMENT');
+  });
+
+  it('server accepts valid Grantor decision submission with 201 Created', async () => {
+    let statusCode = 0;
+    let responseBody = '';
+
+    const grantorToken = await createSignedFirebaseToken({ uid: 'g-101', email: 'director@grantor.org' });
     const mockReq: any = {
       method: 'POST',
       headers: { authorization: `Bearer ${grantorToken}` }
@@ -193,7 +256,7 @@ describe('Human Decision Validation & Recording API', () => {
       reasoning: 'Comprehensive inspection of PR #12 diff and confirmation dialog demonstrates delivery.'
     });
 
-    handleApiRequest(mockReq, mockRes, url, payload);
+    await handleApiRequest(mockReq, mockRes, url, payload, testKeySet);
     expect(statusCode).toBe(201);
     const parsed = JSON.parse(responseBody);
     expect(parsed.success).toBe(true);
@@ -223,7 +286,7 @@ describe('VeriCommit Evaluation API & Domain Rules', () => {
     expect(res.valid).toBe(true);
   });
 
-  it('returns 501 Not Implemented disclosing pending Gemini integration', () => {
+  it('returns 501 Not Implemented disclosing pending Gemini integration', async () => {
     let statusCode = 0;
     let responseBody = '';
 
@@ -246,7 +309,7 @@ describe('VeriCommit Evaluation API & Domain Rules', () => {
       evidence_source: 'sample'
     });
 
-    handleApiRequest(mockReq, mockRes, url, validBody);
+    await handleApiRequest(mockReq, mockRes, url, validBody, testKeySet);
     expect(statusCode).toBe(501);
     const parsed = JSON.parse(responseBody);
     expect(parsed.error.code).toBe('EVALUATION_NOT_IMPLEMENTED');
