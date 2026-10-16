@@ -234,9 +234,14 @@ export async function evaluateMilestone(input: EvaluateMilestoneInput): Promise<
     evidenceItems = SAMPLE_EVIDENCE_ITEMS;
   } else if (input.evidence_source === 'github') {
     try {
+      const token =
+        process.env.GITHUB_TOKEN && process.env.GITHUB_TOKEN.trim().length >= 20
+          ? process.env.GITHUB_TOKEN.trim()
+          : undefined;
+
       const ghEvidence = await fetchGithubEvidence({
         repoUrl: input.repository_url,
-        token: process.env.GITHUB_TOKEN,
+        token,
         fetchFn: input.fetchFn || fetch
       });
 
@@ -382,7 +387,7 @@ Return a JSON object conforming strictly to the requested schema.`;
     }
   });
 
-  const timeoutMs = input.timeoutMs ?? 10000;
+  const timeoutMs = input.timeoutMs ?? 30000;
   let timer: any;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {

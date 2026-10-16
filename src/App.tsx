@@ -20,7 +20,8 @@ import {
   LogIn,
   LogOut,
   Database,
-  RefreshCw
+  RefreshCw,
+  Loader2
 } from 'lucide-react';
 import { FeatureCarousel } from './components/FeatureCarousel';
 import type { User } from 'firebase/auth';
@@ -74,6 +75,8 @@ export default function App() {
 
   // Modal & Async states
   const [isEvaluating, setIsEvaluating] = useState<boolean>(false);
+  const [evaluatingMilestoneId, setEvaluatingMilestoneId] = useState<string | null>(null);
+  const [evalStage, setEvalStage] = useState<'idle' | 'retrieving' | 'evaluating'>('idle');
   const [evalNotice, setEvalNotice] = useState<{ type: 'error' | 'success'; message: string } | null>(null);
 
   // Review Form state
@@ -218,9 +221,37 @@ export default function App() {
 
   // Handle running an AI evaluation
   const handleRunEvaluation = async (milestone: Milestone) => {
+    // 1. Validate that the milestone and its acceptance criteria exist
+    if (!milestone) {
+      setEvalNotice({
+        type: 'error',
+        message: 'No milestone selected for evaluation.'
+      });
+      return;
+    }
+
+    if (!milestone.acceptanceCriteria || milestone.acceptanceCriteria.length === 0) {
+      setEvalNotice({
+        type: 'error',
+        message: `Milestone "${milestone.title}" has no agreed acceptance criteria defined. AI evaluation requires clear, verifiable criteria.`
+      });
+      return;
+    }
+
     setIsEvaluating(true);
+    setEvaluatingMilestoneId(milestone.id);
+    const initialStage = milestone.evidenceSource === 'github' ? 'retrieving' : 'evaluating';
+    setEvalStage(initialStage);
     setEvalNotice(null);
     setSelectedMilestoneId(milestone.id);
+
+    let stageTimer: any = null;
+    if (milestone.evidenceSource === 'github') {
+      // Progress from repository evidence retrieval to Gemini evaluation
+      stageTimer = setTimeout(() => {
+        setEvalStage('evaluating');
+      }, 1000);
+    }
 
     try {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -271,13 +302,13 @@ export default function App() {
         action: 'Generated Evidence Assessment',
         entityType: 'Evaluation',
         entityId: newEvaluation.evaluation_id,
-        details: `Assessed evidence for Milestone "${milestone.title}". Findings persisted to Cloud Firestore.`
+        details: `Assessed evidence for Milestone "${milestone.title}" using Gemini 3.8 Flash (${newEvaluation.evidence_source.toUpperCase()} evidence). Findings persisted to Cloud Firestore.`
       };
       await logAuditEventToFirestore(newAudit);
 
       setEvalNotice({
         type: 'success',
-        message: 'Evidence evaluation generated and persisted to Cloud Firestore.'
+        message: `Evaluation completed successfully via Gemini 3.8 Flash against ${newEvaluation.evidence_source === 'github' ? 'live GitHub repository' : 'demonstration sample'} evidence.`
       });
       setActiveTab('verification-report');
     } catch (apiErr: any) {
@@ -287,7 +318,10 @@ export default function App() {
         message: `Evaluation failed: ${apiErr.message || 'Failed to complete evidence evaluation'}`
       });
     } finally {
+      if (stageTimer) clearTimeout(stageTimer);
       setIsEvaluating(false);
+      setEvaluatingMilestoneId(null);
+      setEvalStage('idle');
     }
   };
 
@@ -558,6 +592,35 @@ export default function App() {
           </div>
         )}
 
+        {/* In-Flight Evaluation Progress Banner */}
+        {isEvaluating && (
+          <div
+            className="mb-4 sm:mb-6 p-4 rounded-xl text-xs sm:text-sm shadow-xs bg-[#EAF2F8] border border-[#BBD5E8] text-[#142C3E] flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+            data-testid="evaluation-progress-banner"
+          >
+            <div className="flex items-start sm:items-center gap-3 min-w-0">
+              <Loader2 className="w-5 h-5 text-[#167D72] animate-spin shrink-0 mt-0.5 sm:mt-0" />
+              <div>
+                <p className="font-semibold text-[#142C3E]">
+                  {evalStage === 'retrieving'
+                    ? 'Retrieving repository evidence...'
+                    : 'Gemini is evaluating the milestone against acceptance criteria...'}
+                </p>
+                <p className="text-xs text-[#5B6673] mt-0.5">
+                  {evalStage === 'retrieving'
+                    ? 'Fetching commits and pull requests from GitHub repository.'
+                    : 'Running server-side Gemini 3.8 Flash model with grounded evidence constraints.'}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0 self-start sm:self-center">
+              <span className="text-[11px] font-mono font-semibold text-[#167D72] uppercase px-2.5 py-1 bg-white rounded border border-[#BBD5E8]">
+                {evalStage === 'retrieving' ? 'Stage 1/2: Retrieval' : 'Stage 2/2: Evaluation'}
+              </span>
+            </div>
+          </div>
+        )}
+
         {/* Prominent Evaluation Notice (Success or Explicit Error) */}
         {evalNotice && activeTab !== 'verification-report' && (
           <div
@@ -716,10 +779,19 @@ export default function App() {
                             <button
                               onClick={() => handleRunEvaluation(ms)}
                               disabled={isEvaluating}
-                              className="flex-1 sm:flex-none px-3 py-2.5 text-xs font-medium text-white bg-[#142C3E] hover:bg-[#1E3E56] rounded-lg transition flex items-center justify-center gap-1.5 shadow-xs min-h-[44px]"
+                              className="flex-1 sm:flex-none px-3 py-2.5 text-xs font-medium text-white bg-[#142C3E] hover:bg-[#1E3E56] disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition flex items-center justify-center gap-1.5 shadow-xs min-h-[44px]"
                             >
-                              <Play className="w-3.5 h-3.5 text-[#167D72]" />
-                              Evaluate Evidence
+                              {isEvaluating && evaluatingMilestoneId === ms.id ? (
+                                <>
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin text-[#167D72]" />
+                                  <span>{evalStage === 'retrieving' ? 'Retrieving Evidence...' : 'Evaluating with Gemini...'}</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Play className="w-3.5 h-3.5 text-[#167D72]" />
+                                  <span>Evaluate Evidence</span>
+                                </>
+                              )}
                             </button>
                           )}
                         </div>
@@ -759,10 +831,19 @@ export default function App() {
                 <button
                   onClick={() => handleRunEvaluation(currentMilestone)}
                   disabled={isEvaluating}
-                  className="w-full sm:w-auto px-4 py-2.5 bg-[#142C3E] text-white text-xs sm:text-sm font-medium rounded-lg hover:bg-[#1E3E56] transition flex items-center justify-center gap-2 shadow-xs min-h-[44px]"
+                  className="w-full sm:w-auto px-4 py-2.5 bg-[#142C3E] text-white text-xs sm:text-sm font-medium rounded-lg hover:bg-[#1E3E56] disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center justify-center gap-2 shadow-xs min-h-[44px]"
                 >
-                  <Sparkles className="w-4 h-4 text-[#167D72] shrink-0" />
-                  <span>{isEvaluating ? 'Evaluating Evidence...' : 'Run AI-Assisted Evaluation'}</span>
+                  {isEvaluating && evaluatingMilestoneId === currentMilestone.id ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin text-[#167D72] shrink-0" />
+                      <span>{evalStage === 'retrieving' ? 'Retrieving repository evidence...' : 'Gemini is evaluating milestone...'}</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-4 h-4 text-[#167D72] shrink-0" />
+                      <span>Run AI-Assisted Evaluation</span>
+                    </>
+                  )}
                 </button>
               </div>
             </div>
@@ -1183,6 +1264,35 @@ export default function App() {
         {/* TAB 4: VERIFICATION REPORT */}
         {activeTab === 'verification-report' && (
           <div className="space-y-4 sm:space-y-6">
+            {/* In-Flight Evaluation Progress Banner */}
+            {isEvaluating && (
+              <div
+                className="p-4 rounded-xl text-xs sm:text-sm shadow-xs bg-[#EAF2F8] border border-[#BBD5E8] text-[#142C3E] flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                data-testid="evaluation-progress-banner"
+              >
+                <div className="flex items-start sm:items-center gap-3 min-w-0">
+                  <Loader2 className="w-5 h-5 text-[#167D72] animate-spin shrink-0 mt-0.5 sm:mt-0" />
+                  <div>
+                    <p className="font-semibold text-[#142C3E]">
+                      {evalStage === 'retrieving'
+                        ? 'Retrieving repository evidence...'
+                        : 'Gemini is evaluating the milestone against acceptance criteria...'}
+                    </p>
+                    <p className="text-xs text-[#5B6673] mt-0.5">
+                      {evalStage === 'retrieving'
+                        ? 'Fetching commits and pull requests from GitHub repository.'
+                        : 'Running server-side Gemini 3.8 Flash model with grounded evidence constraints.'}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0 self-start sm:self-center">
+                  <span className="text-[11px] font-mono font-semibold text-[#167D72] uppercase px-2.5 py-1 bg-white rounded border border-[#BBD5E8]">
+                    {evalStage === 'retrieving' ? 'Stage 1/2: Retrieval' : 'Stage 2/2: Evaluation'}
+                  </span>
+                </div>
+              </div>
+            )}
+
             {evalNotice && (
               <div
                 className={`p-3.5 sm:p-4 rounded-xl text-xs sm:text-sm flex items-center justify-between gap-2 shadow-xs ${
@@ -1218,9 +1328,19 @@ export default function App() {
                 <button
                   onClick={() => handleRunEvaluation(currentMilestone)}
                   disabled={isEvaluating}
-                  className="w-full sm:w-auto px-4 py-2.5 bg-[#142C3E] text-white text-xs sm:text-sm font-medium rounded-lg hover:bg-[#1E3E56] transition min-h-[44px]"
+                  className="w-full sm:w-auto px-4 py-2.5 bg-[#142C3E] text-white text-xs sm:text-sm font-medium rounded-lg hover:bg-[#1E3E56] disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center justify-center gap-2 min-h-[44px] mx-auto"
                 >
-                  Run Evidence Evaluation
+                  {isEvaluating && evaluatingMilestoneId === currentMilestone.id ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin text-[#167D72] shrink-0" />
+                      <span>{evalStage === 'retrieving' ? 'Retrieving repository evidence...' : 'Gemini is evaluating milestone...'}</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-4 h-4 text-[#167D72] shrink-0" />
+                      <span>Run Evidence Evaluation</span>
+                    </>
+                  )}
                 </button>
               </div>
             ) : (
@@ -1234,16 +1354,27 @@ export default function App() {
                           {currentEvaluation.evaluation_id}
                         </span>
                         <span className="text-xs text-[#167D72] font-semibold uppercase">
-                          AI-Assisted Assessment
+                          AI-Assisted Assessment (Gemini 3.8 Flash)
+                        </span>
+                        <span className="text-xs font-semibold bg-[#FEF3D6] text-[#8C5E00] border border-[#F3DE9D] px-2 py-0.5 rounded flex items-center gap-1">
+                          <AlertTriangle className="w-3 h-3 text-[#8C5E00]" />
+                          Human Review Required: {currentEvaluation.human_review_required ? 'Yes (Enforced)' : 'No'}
+                        </span>
+                        <span className={`text-xs px-2 py-0.5 rounded font-semibold uppercase ${
+                          currentEvaluation.evidence_source === 'github'
+                            ? 'bg-[#E6F4F2] text-[#167D72] border border-[#A8DDD7]'
+                            : 'bg-[#F0F4F8] text-[#5B6673] border border-[#DCE3E9]'
+                        }`}>
+                          {currentEvaluation.evidence_source === 'github' ? 'Live GitHub Evidence' : 'Sample Demonstration Evidence'}
                         </span>
                       </div>
-                      <h1 className="text-xl sm:text-2xl font-bold text-[#142C3E] mt-1 break-words">{currentEvaluation.milestone_title}</h1>
+                      <h1 className="text-xl sm:text-2xl font-bold text-[#142C3E] mt-2 break-words">{currentEvaluation.milestone_title}</h1>
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[#5B6673] mt-1">
                         <span>Project: {currentEvaluation.project_name}</span>
                         <span>•</span>
-                        <span>Evaluated: {new Date(currentEvaluation.evaluated_at).toLocaleDateString()}</span>
+                        <span>Evaluated: {new Date(currentEvaluation.evaluated_at).toLocaleString()}</span>
                         <span>•</span>
-                        <span className="font-mono">Source: {currentEvaluation.evidence_source.toUpperCase()}</span>
+                        <span className="font-mono">Engine: Gemini 3.8 Flash (Server-Side)</span>
                       </div>
                     </div>
 

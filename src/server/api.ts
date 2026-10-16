@@ -409,12 +409,17 @@ export async function handleApiRequest(
     const branch = url.searchParams.get('branch') || undefined;
     const since = url.searchParams.get('since') || undefined;
 
+    const githubToken =
+      process.env.GITHUB_TOKEN && process.env.GITHUB_TOKEN.trim().length >= 20
+        ? process.env.GITHUB_TOKEN.trim()
+        : undefined;
+
     try {
       const evidence = await fetchGithubEvidence({
         repoUrl,
         branch,
         since,
-        token: process.env.GITHUB_TOKEN,
+        token: githubToken,
         fetchFn: customFetchFn || fetch
       });
 

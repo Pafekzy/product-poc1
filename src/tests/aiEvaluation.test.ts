@@ -534,5 +534,72 @@ describe('Gemini Evaluation Engine — Error Handling & Test Isolation', () => {
     expect(statusCode).toBe(502);
     expect(JSON.parse(responseBody).error.code).toBe('GEMINI_INVALID_OUTPUT');
   });
+
+  it('Validates that evaluation request rejects empty acceptance criteria', () => {
+    const invalidPayload = {
+      project_name: 'Decentralized Tools',
+      repository_url: 'https://github.com/example/community-tools',
+      milestone: {
+        title: 'Milestone with no criteria',
+        description: 'Missing criteria definition',
+        acceptance_criteria: []
+      },
+      evidence_source: 'sample'
+    };
+
+    const validation = validateEvaluationRequest(invalidPayload);
+    expect(validation.valid).toBe(false);
+    expect(validation.error?.code).toBe('INVALID_REQUEST');
+    expect(validation.error?.message).toContain('non-empty array');
+  });
+
+  it('End-to-End: Generates structured evaluation report with grounded citations and human_review_required invariant', async () => {
+    let statusCode = 0;
+    let responseBody = '';
+
+    const mockReq: any = { method: 'POST', headers: {} };
+    const mockRes: any = {
+      setHeader: () => {},
+      set statusCode(val: number) {
+        statusCode = val;
+      },
+      end: (data: string) => {
+        responseBody = data;
+      }
+    };
+
+    const url = new URL('http://localhost:3000/api/v1/evaluations');
+    const validBody = JSON.stringify({
+      project_name: 'Public Goods Platform',
+      repository_url: 'https://github.com/example/community-tools',
+      milestone: {
+        title: 'Registration & Verification',
+        description: 'Implement core user registration flow and tests',
+        acceptance_criteria: [
+          'A user can submit the registration form and receive account confirmation.'
+        ]
+      },
+      evidence_source: 'sample'
+    });
+
+    const mockAi = createMockGeminiClient();
+
+    const handled = await handleApiRequest(mockReq, mockRes, url, validBody, testKeySet, undefined, mockAi);
+
+    expect(handled).toBe(true);
+    expect(statusCode).toBe(200);
+
+    const report = JSON.parse(responseBody);
+    expect(report.evaluation_id).toMatch(/^eval_/);
+    expect(report.milestone_title).toBe('Registration & Verification');
+    expect(report.human_review_required).toBe(true);
+    expect(report.criteria_results).toHaveLength(1);
+    expect(report.criteria_results[0].status).toBe('supported');
+    expect(report.criteria_results[0].evidence).toHaveLength(1);
+    expect(report.criteria_results[0].evidence[0].url).toBe('https://github.com/example/community-tools/pull/12');
+    expect(report.limitations.length).toBeGreaterThan(0);
+    expect(report.suggested_next_steps.length).toBeGreaterThan(0);
+  });
 });
+
 
