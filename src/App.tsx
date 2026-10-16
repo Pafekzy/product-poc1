@@ -21,6 +21,7 @@ import {
   LogOut,
   Database
 } from 'lucide-react';
+import { FeatureCarousel } from './components/FeatureCarousel';
 import type { User } from 'firebase/auth';
 import {
   FundingAgreement,
@@ -565,23 +566,8 @@ export default function App() {
               </div>
             </div>
 
-            {/* Workflow Infographic Preview */}
-            <div className="bg-white rounded-xl border border-[#DCE3E9] p-4 sm:p-5 shadow-xs">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 mb-3">
-                <h2 className="text-sm font-bold text-[#142C3E] flex items-center gap-2">
-                  <ShieldCheck className="w-4 h-4 text-[#167D72] shrink-0" />
-                  Verified Evidence Workflow
-                </h2>
-                <span className="text-[11px] sm:text-xs text-[#5B6673]">Evidence before claims • Human accountability</span>
-              </div>
-              <div className="w-full overflow-hidden rounded-lg border border-[#DCE3E9] bg-[#F5F7F9] p-2 flex justify-center">
-                <img
-                  src="/images/vericommit-evidence-workflow-infographic.png"
-                  alt="VeriCommit Evidence Workflow"
-                  className="w-full h-auto max-h-48 object-contain"
-                />
-              </div>
-            </div>
+            {/* Interactive Feature Showcase Carousel */}
+            <FeatureCarousel />
 
             {/* Milestones List */}
             <div className="bg-white rounded-xl border border-[#DCE3E9] overflow-hidden shadow-xs">
