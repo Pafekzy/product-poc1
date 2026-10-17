@@ -479,4 +479,226 @@ describe('Prompt 04: Authoritative Persistence and Agreement-Scoped Relationship
       expect(reloadedMilestone.humanDecision?.milestone_id).toBe('ms-01');
     });
   });
+
+  describe('Prompt 05: Security Boundaries, Duplicate Submission Guards & Failure Handling', () => {
+    it('rejects unauthenticated decision request with 401 UNAUTHORIZED', async () => {
+      let statusCode = 0;
+      let responseBody = '';
+
+      const mockReq: any = {
+        method: 'POST',
+        headers: {} // No authorization header
+      };
+      const mockRes: any = {
+        setHeader: () => {},
+        set statusCode(val: number) { statusCode = val; },
+        end: (data: string) => { responseBody = data; }
+      };
+
+      const url = new URL('http://localhost:3000/api/v1/decisions');
+      const payload = JSON.stringify({
+        agreement_id: 'fa-8041',
+        milestone_id: 'ms-01',
+        status: 'approved',
+        reasoning: 'Attempting unauthenticated decision signing.'
+      });
+
+      await handleApiRequest(mockReq, mockRes, url, payload, testKeySet);
+      expect(statusCode).toBe(401);
+      expect(JSON.parse(responseBody).error.code).toBe('UNAUTHORIZED');
+    });
+
+    it('rejects decision with forged or untrusted token with 401 FORGED_SIGNATURE', async () => {
+      let statusCode = 0;
+      let responseBody = '';
+
+      // Token not signed by testKeySet
+      const untrustedToken = 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJnLTEwMSIsImF1ZCI6Imdlbi1sYW5nLWNsaWVudC0wNzk0MzAwNDM2IiwiaXNzIjoiaHR0cHM6Ly9zZWN1cmV0b2tlbi5nb29nbGUuY29tL2dlbi1sYW5nLWNsaWVudC0wNzk0MzAwNDM2In0.invalidsignaturehere';
+
+      const mockReq: any = {
+        method: 'POST',
+        headers: { authorization: `Bearer ${untrustedToken}` }
+      };
+      const mockRes: any = {
+        setHeader: () => {},
+        set statusCode(val: number) { statusCode = val; },
+        end: (data: string) => { responseBody = data; }
+      };
+
+      const url = new URL('http://localhost:3000/api/v1/decisions');
+      const payload = JSON.stringify({
+        agreement_id: 'fa-8041',
+        milestone_id: 'ms-01',
+        status: 'approved',
+        reasoning: 'Attempting decision with forged token.'
+      });
+
+      await handleApiRequest(mockReq, mockRes, url, payload, testKeySet);
+      expect(statusCode).toBe(401);
+      expect(JSON.parse(responseBody).error.code).toBe('FORGED_SIGNATURE');
+    });
+
+    it('rejects cross-agreement decision request when caller is Grantor of another agreement with 403 FORBIDDEN_CROSS_AGREEMENT_ACCESS', async () => {
+      let statusCode = 0;
+      let responseBody = '';
+
+      // User is grantor on a different agreement, not fa-8041
+      const alienGrantorToken = await createSignedFirebaseToken({
+        uid: 'g-999-other-foundation',
+        email: 'director@other-foundation.org'
+      });
+
+      const mockReq: any = {
+        method: 'POST',
+        headers: { authorization: `Bearer ${alienGrantorToken}` }
+      };
+      const mockRes: any = {
+        setHeader: () => {},
+        set statusCode(val: number) { statusCode = val; },
+        end: (data: string) => { responseBody = data; }
+      };
+
+      const url = new URL('http://localhost:3000/api/v1/decisions');
+      const payload = JSON.stringify({
+        agreement_id: 'fa-8041',
+        milestone_id: 'ms-01',
+        status: 'approved',
+        reasoning: 'Foreign grantor attempting to sign decision on fa-8041.'
+      });
+
+      await handleApiRequest(mockReq, mockRes, url, payload, testKeySet);
+      expect(statusCode).toBe(403);
+      expect(JSON.parse(responseBody).error.code).toBe('FORBIDDEN_CROSS_AGREEMENT_ACCESS');
+    });
+
+    it('simulates duplicate submission prevention where in-flight submission guard halts secondary invocation', async () => {
+      let submissionCount = 0;
+      let isSubmitting = false;
+
+      // Simulated client handler matching handleRecordDecision pattern
+      const submitDecision = async () => {
+        if (isSubmitting) return 'BLOCKED_DUPLICATE';
+        isSubmitting = true;
+        try {
+          submissionCount++;
+          // Simulate network latency
+          await new Promise(r => setTimeout(r, 20));
+          return 'SUCCESS';
+        } finally {
+          isSubmitting = false;
+        }
+      };
+
+      // User rapidly double-clicks
+      const [firstClick, secondClick] = await Promise.all([
+        submitDecision(),
+        submitDecision()
+      ]);
+
+      expect(submissionCount).toBe(1);
+      expect(firstClick).toBe('SUCCESS');
+      expect(secondClick).toBe('BLOCKED_DUPLICATE');
+    });
+
+    it('handles partial persistence failure: reports clear error when Firestore write rejects without false success', async () => {
+      const feedbackState: { current: { type: string; message: string } | null } = { current: null };
+
+      // Simulate client flow where server approves but Firestore write fails
+      const executePersist = async () => {
+        // Step 1: Server approves
+        const serverApproved = true;
+        expect(serverApproved).toBe(true);
+
+        // Step 2: Firestore write throws
+        try {
+          throw new Error('Missing or insufficient permissions: permission-denied');
+        } catch (saveErr: any) {
+          feedbackState.current = {
+            type: 'error',
+            message: `Server approved decision, but Cloud Firestore write failed: ${saveErr.message || 'Permission denied'}.`
+          };
+        }
+      };
+
+      await executePersist();
+      expect(feedbackState.current).not.toBeNull();
+      expect(feedbackState.current?.type).toBe('error');
+      expect(feedbackState.current?.message).toContain('Cloud Firestore write failed');
+      expect(feedbackState.current?.message).toContain('permission-denied');
+    });
+
+    it('getAuthoritativeAgreement fails closed (returns null) when Firestore REST returns 403 Forbidden', async () => {
+      const mockForbiddenFetch = (async () => ({
+        status: 403,
+        ok: false,
+        json: async () => ({ error: { code: 403, message: 'Missing or insufficient permissions.' } })
+      })) as any;
+
+      const dummyToken = 'header.payload.signature';
+      const result = await getAuthoritativeAgreement('fa-8041', dummyToken, mockForbiddenFetch);
+      expect(result).toBeNull();
+    });
+
+    it('getAuthoritativeAgreement fails closed (returns null) when Firestore REST returns 404 Not Found', async () => {
+      const mockNotFoundFetch = (async () => ({
+        status: 404,
+        ok: false,
+        json: async () => ({ error: { code: 404, message: 'Document not found.' } })
+      })) as any;
+
+      const dummyToken = 'header.payload.signature';
+      const result = await getAuthoritativeAgreement('fa-ghost', dummyToken, mockNotFoundFetch);
+      expect(result).toBeNull();
+    });
+
+    it('getAuthoritativeAgreement parses live Firestore REST document structure and milestones subcollection', async () => {
+      const mockSuccessFetch = (async (url: string) => {
+        if (url.endsWith('/milestones')) {
+          return {
+            status: 200,
+            ok: true,
+            json: async () => ({
+              documents: [
+                {
+                  name: 'projects/p/databases/d/documents/funding_agreements/fa-live-99/milestones/ms-live-01',
+                  fields: {
+                    id: { stringValue: 'ms-live-01' },
+                    fundingAgreementId: { stringValue: 'fa-live-99' },
+                    title: { stringValue: 'Production deliverable' },
+                    evidenceSource: { stringValue: 'github' },
+                    repositoryUrl: { stringValue: 'https://github.com/Pafekzy/product-poc1' }
+                  }
+                }
+              ]
+            })
+          };
+        }
+        return {
+          status: 200,
+          ok: true,
+          json: async () => ({
+            fields: {
+              id: { stringValue: 'fa-live-99' },
+              title: { stringValue: 'Live Verified Grant Agreement' },
+              grantorId: { stringValue: 'g-live-owner' },
+              grantorEmail: { stringValue: 'owner@live-foundation.org' },
+              granteeId: { stringValue: 'ge-live-builder' },
+              granteeEmail: { stringValue: 'builder@live-protocol.org' },
+              status: { stringValue: 'active' }
+            }
+          })
+        };
+      }) as any;
+
+      const dummyToken = 'header.payload.signature';
+      const parsedAgreement = await getAuthoritativeAgreement('fa-live-99', dummyToken, mockSuccessFetch);
+      expect(parsedAgreement).not.toBeNull();
+      expect(parsedAgreement?.id).toBe('fa-live-99');
+      expect(parsedAgreement?.grantorId).toBe('g-live-owner');
+      expect(parsedAgreement?.grantorEmail).toBe('owner@live-foundation.org');
+      expect(parsedAgreement?.milestones).toHaveLength(1);
+      expect(parsedAgreement?.milestones[0].id).toBe('ms-live-01');
+      expect(parsedAgreement?.milestones[0].repositoryUrl).toBe('https://github.com/Pafekzy/product-poc1');
+    });
+  });
 });

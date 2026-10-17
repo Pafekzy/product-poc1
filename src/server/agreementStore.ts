@@ -42,16 +42,16 @@ export async function getAuthoritativeAgreement(
     return null;
   }
 
-  // In test environment, resolve authoritatively via registry (avoids live Google network calls with synthetic test JWTs)
-  if (process.env.NODE_ENV === 'test' || process.env.VITEST) {
-    if (authoritativeRegistry.has(agreementId)) {
-      return authoritativeRegistry.get(agreementId)!;
-    }
-    return null;
-  }
-
   // 1. Live Cloud Firestore REST resolution with the user's verified Bearer token
   if (rawIdToken && rawIdToken.split('.').length === 3) {
+    // In hermetic test mode with default fetch, resolve via test registry to avoid live network calls
+    if ((process.env.NODE_ENV === 'test' || process.env.VITEST) && customFetchFn === fetch) {
+      if (authoritativeRegistry.has(agreementId)) {
+        return authoritativeRegistry.get(agreementId)!;
+      }
+      return null;
+    }
+
     try {
       const projectId = firebaseConfig.projectId;
       const databaseId = firebaseConfig.firestoreDatabaseId || '(default)';
@@ -122,17 +122,20 @@ export async function getAuthoritativeAgreement(
           }
         }
 
-        // Cache into registry for fast subsequent lookups
-        authoritativeRegistry.set(agreementId, agreement);
         return agreement;
       }
     }
   } catch {
-      // Network unreachable or in offline test environment - proceed to authoritative registry
+      // Network unreachable or offline
     }
   }
 
-  // 2. Authoritative Server Registry resolution
+  // In production, NEVER fall back to in-memory registry. Fail closed.
+  if (!(process.env.NODE_ENV === 'test' || process.env.VITEST)) {
+    return null;
+  }
+
+  // 2. Authoritative Server Registry resolution (strictly for hermetic unit/integration test isolation)
   if (authoritativeRegistry.has(agreementId)) {
     return authoritativeRegistry.get(agreementId)!;
   }
