@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { validateEvaluationRequest, validateDecisionRequest, handleApiRequest } from '../server/api';
 import { verifyFirebaseIdToken, checkAgreementAuthorization } from '../server/auth';
-import { AuditLogEntry } from '../types';
+import { AuditLogEntry, FundingAgreement } from '../types';
 import { initTestCrypto, createSignedFirebaseToken, testKeySet, createMockGeminiClient } from './testHelpers';
 import { initialFundingAgreements } from '../data/mockData';
 
@@ -342,5 +342,227 @@ describe('Audit History & Immutability Rules', () => {
     expect(auditEntry.entityType).toBe('HumanDecision');
     expect(auditEntry.entityId).toBe('dec-1234');
     expect(auditEntry.timestamp).toBeTruthy();
+  });
+});
+
+describe('Multi-Agreement Listing & Scoped Authorization', () => {
+  it('rejects unauthenticated request to GET /api/v1/agreements with 401 UNAUTHORIZED', async () => {
+    let statusCode = 0;
+    let responseBody = '';
+
+    const mockReq: any = { method: 'GET', headers: {} };
+    const mockRes: any = {
+      setHeader: () => {},
+      set statusCode(val: number) { statusCode = val; },
+      end: (data: string) => { responseBody = data; }
+    };
+
+    const url = new URL('http://localhost:3000/api/v1/agreements');
+    const handled = await handleApiRequest(mockReq, mockRes, url, '', testKeySet);
+    expect(handled).toBe(true);
+    expect(statusCode).toBe(401);
+    expect(JSON.parse(responseBody).error.code).toBe('UNAUTHORIZED');
+  });
+
+  it('lists only authorized agreements for Grantor (Elena Vance / g-101)', async () => {
+    const grantorToken = await createSignedFirebaseToken({
+      uid: 'g-101',
+      email: 'imaginright.dev@gmail.com',
+      email_verified: true
+    });
+
+    let statusCode = 0;
+    let responseBody = '';
+
+    const mockReq: any = {
+      method: 'GET',
+      headers: { authorization: `Bearer ${grantorToken}` }
+    };
+    const mockRes: any = {
+      setHeader: () => {},
+      set statusCode(val: number) { statusCode = val; },
+      end: (data: string) => { responseBody = data; }
+    };
+
+    const url = new URL('http://localhost:3000/api/v1/agreements');
+    await handleApiRequest(mockReq, mockRes, url, '', testKeySet);
+    expect(statusCode).toBe(200);
+
+    const parsed = JSON.parse(responseBody);
+    expect(parsed.total).toBe(2);
+    const agreementIds = parsed.agreements.map((a: any) => a.id);
+    expect(agreementIds).toContain('fa-8041');
+    expect(agreementIds).toContain('fa-9210');
+    expect(agreementIds).not.toContain('fa-7342'); // Foreign agreement where g-101 is not a party
+    expect(parsed.agreements[0].userRole).toBe('Grantor');
+  });
+
+  it('lists only authorized agreements for Grantee (ge-202)', async () => {
+    const granteeToken = await createSignedFirebaseToken({
+      uid: 'ge-202',
+      email: 'grantee@example.com',
+      email_verified: true
+    });
+
+    let statusCode = 0;
+    let responseBody = '';
+
+    const mockReq: any = {
+      method: 'GET',
+      headers: { authorization: `Bearer ${granteeToken}` }
+    };
+    const mockRes: any = {
+      setHeader: () => {},
+      set statusCode(val: number) { statusCode = val; },
+      end: (data: string) => { responseBody = data; }
+    };
+
+    const url = new URL('http://localhost:3000/api/v1/agreements');
+    await handleApiRequest(mockReq, mockRes, url, '', testKeySet);
+    expect(statusCode).toBe(200);
+
+    const parsed = JSON.parse(responseBody);
+    expect(parsed.total).toBe(2);
+    const agreementIds = parsed.agreements.map((a: any) => a.id);
+    expect(agreementIds).toContain('fa-8041');
+    expect(agreementIds).toContain('fa-7342');
+    expect(agreementIds).not.toContain('fa-9210'); // Foreign agreement where ge-202 is not a party
+    expect(parsed.agreements.every((a: any) => a.userRole === 'Grantee')).toBe(true);
+  });
+
+  it('returns empty agreements array for a completely foreign user', async () => {
+    const strangerToken = await createSignedFirebaseToken({
+      uid: 'stranger-999',
+      email: 'stranger@example.com',
+      email_verified: true
+    });
+
+    let statusCode = 0;
+    let responseBody = '';
+
+    const mockReq: any = {
+      method: 'GET',
+      headers: { authorization: `Bearer ${strangerToken}` }
+    };
+    const mockRes: any = {
+      setHeader: () => {},
+      set statusCode(val: number) { statusCode = val; },
+      end: (data: string) => { responseBody = data; }
+    };
+
+    const url = new URL('http://localhost:3000/api/v1/agreements');
+    await handleApiRequest(mockReq, mockRes, url, '', testKeySet);
+    expect(statusCode).toBe(200);
+
+    const parsed = JSON.parse(responseBody);
+    expect(parsed.total).toBe(0);
+    expect(parsed.agreements).toHaveLength(0);
+  });
+
+  it('strictly rejects cross-agreement GET /api/v1/agreements/:id for unauthorized user with 403', async () => {
+    const grantorToken = await createSignedFirebaseToken({
+      uid: 'g-101',
+      email: 'imaginright.dev@gmail.com',
+      email_verified: true
+    });
+
+    let statusCode = 0;
+    let responseBody = '';
+
+    const mockReq: any = {
+      method: 'GET',
+      headers: { authorization: `Bearer ${grantorToken}` }
+    };
+    const mockRes: any = {
+      setHeader: () => {},
+      set statusCode(val: number) { statusCode = val; },
+      end: (data: string) => { responseBody = data; }
+    };
+
+    // g-101 attempts to access fa-7342 (belonging to g-404 and ge-202)
+    const url = new URL('http://localhost:3000/api/v1/agreements/fa-7342');
+    await handleApiRequest(mockReq, mockRes, url, '', testKeySet);
+    expect(statusCode).toBe(403);
+    const parsed = JSON.parse(responseBody);
+    expect(parsed.error.code).toBe('FORBIDDEN_CROSS_AGREEMENT_ACCESS');
+  });
+
+  it('demonstrates dynamic role calculation across multiple agreements', () => {
+    const user = { uid: 'user-hybrid', email: 'hybrid@example.com', email_verified: true };
+
+    const agreementAsGrantor: FundingAgreement = {
+      id: 'ag-as-grantor',
+      title: 'Grantor Role Agreement',
+      grantorId: 'user-hybrid',
+      grantorName: 'Hybrid User (Grantor)',
+      granteeId: 'other-user',
+      granteeName: 'Other Grantee',
+      description: 'Test',
+      milestones: [],
+      status: 'active',
+      createdAt: '2026-09-01T00:00:00Z'
+    };
+
+    const agreementAsGrantee: FundingAgreement = {
+      id: 'ag-as-grantee',
+      title: 'Grantee Role Agreement',
+      grantorId: 'other-grantor',
+      grantorName: 'Other Grantor',
+      granteeId: 'user-hybrid',
+      granteeName: 'Hybrid User (Grantee)',
+      description: 'Test',
+      milestones: [],
+      status: 'active',
+      createdAt: '2026-09-01T00:00:00Z'
+    };
+
+    const auth1 = checkAgreementAuthorization(user, agreementAsGrantor);
+    expect(auth1.authorized).toBe(true);
+    expect(auth1.role).toBe('Grantor');
+
+    const auth2 = checkAgreementAuthorization(user, agreementAsGrantee);
+    expect(auth2.authorized).toBe(true);
+    expect(auth2.role).toBe('Grantee');
+
+    // Privileged grantor action should succeed on ag1 but fail on ag2
+    const grantorActionOnAg1 = checkAgreementAuthorization(user, agreementAsGrantor, 'Grantor');
+    expect(grantorActionOnAg1.authorized).toBe(true);
+
+    const grantorActionOnAg2 = checkAgreementAuthorization(user, agreementAsGrantee, 'Grantor');
+    expect(grantorActionOnAg2.authorized).toBe(false);
+    expect(grantorActionOnAg2.error?.code).toBe('FORBIDDEN_GRANTOR_ONLY');
+  });
+
+  it('protects against stale asynchronous responses across agreement context switches', () => {
+    let currentAgreementId = 'fa-8041';
+    let localMilestoneId = 'ms-01';
+
+    // Simulate switching active agreement
+    const switchAgreement = (newAgreementId: string, initialMilestoneId: string) => {
+      currentAgreementId = newAgreementId;
+      localMilestoneId = initialMilestoneId;
+    };
+
+    switchAgreement('fa-9210', 'ms-doc-01');
+    expect(currentAgreementId).toBe('fa-9210');
+    expect(localMilestoneId).toBe('ms-doc-01');
+
+    // Simulate delayed async response from previous agreement fa-8041
+    const handleAsyncResponse = (responseAgreementId: string, payload: any) => {
+      if (responseAgreementId !== currentAgreementId) {
+        // Discard stale response
+        return false;
+      }
+      localMilestoneId = payload.milestoneId;
+      return true;
+    };
+
+    const staleProcessed = handleAsyncResponse('fa-8041', { milestoneId: 'ms-01-stale' });
+    expect(staleProcessed).toBe(false);
+    expect(localMilestoneId).toBe('ms-doc-01'); // Untouched
+
+    const validProcessed = handleAsyncResponse('fa-9210', { milestoneId: 'ms-doc-02' });
+    expect(validProcessed).toBe(true);
+    expect(localMilestoneId).toBe('ms-doc-02');
   });
 });

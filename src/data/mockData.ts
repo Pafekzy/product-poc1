@@ -89,6 +89,94 @@ export const initialFundingAgreements: FundingAgreement[] = [
         ]
       }
     ]
+  },
+  {
+    id: 'fa-9210',
+    title: 'Open Web Documentation & Tutorials Grant',
+    grantorId: 'g-101',
+    grantorName: 'Open Web Stewardship Foundation',
+    grantorEmail: 'imaginright.dev@gmail.com',
+    granteeId: 'ge-303',
+    granteeName: 'TechDocs Community Initiative',
+    granteeEmail: 'techdocs@example.com',
+    description: 'Grant to author interactive developer guides, verification walkthroughs, and API documentation for decentralized grant recipients.',
+    totalCommitment: '$25,000 USD',
+    status: 'active',
+    createdAt: '2026-09-15T12:00:00Z',
+    milestones: [
+      {
+        id: 'ms-doc-01',
+        fundingAgreementId: 'fa-9210',
+        title: 'Interactive Verification Guides',
+        description: 'Create step-by-step developer documentation for milestone submission.',
+        repositoryUrl: 'https://github.com/example/community-docs',
+        evidenceSource: 'sample',
+        targetDate: '2026-10-30',
+        createdAt: '2026-09-15T12:00:00Z',
+        updatedAt: '2026-09-15T12:00:00Z',
+        acceptanceCriteria: [
+          {
+            id: 'ac-d1',
+            description: 'Documentation portal deployed with milestone guide.',
+            status: 'supported',
+            explanation: 'Documentation site deployed on staging preview with complete guide.'
+          }
+        ]
+      },
+      {
+        id: 'ms-doc-02',
+        fundingAgreementId: 'fa-9210',
+        title: 'API Contract & Security Reference',
+        description: 'Publish detailed API specification and security reference for grant verification.',
+        repositoryUrl: 'https://github.com/example/community-docs',
+        evidenceSource: 'sample',
+        targetDate: '2026-11-20',
+        createdAt: '2026-09-15T12:00:00Z',
+        updatedAt: '2026-09-15T12:00:00Z',
+        acceptanceCriteria: [
+          {
+            id: 'ac-d2',
+            description: 'Complete API contract and security documentation published.',
+            status: 'human_decision_pending'
+          }
+        ]
+      }
+    ]
+  },
+  {
+    id: 'fa-7342',
+    title: 'Cross-Chain Settlement & Audit Verification Grant',
+    grantorId: 'g-404',
+    grantorName: 'Stellar Ecosystem Foundation',
+    grantorEmail: 'stellar@grantor.org',
+    granteeId: 'ge-202',
+    granteeName: 'Decentralized Builders Collective',
+    granteeEmail: 'grantee@example.com',
+    description: 'Grant to research and develop multi-party audit trails and cross-chain milestone settlement protocols.',
+    totalCommitment: '$60,000 USD',
+    status: 'active',
+    createdAt: '2026-09-20T14:00:00Z',
+    milestones: [
+      {
+        id: 'ms-xchain-01',
+        fundingAgreementId: 'fa-7342',
+        title: 'Audit Trail Protocol Specification',
+        description: 'Design append-only cryptographic audit logs for verification decisions.',
+        repositoryUrl: 'https://github.com/example/audit-protocol',
+        evidenceSource: 'sample',
+        targetDate: '2026-11-10',
+        createdAt: '2026-09-20T14:00:00Z',
+        updatedAt: '2026-09-20T14:00:00Z',
+        acceptanceCriteria: [
+          {
+            id: 'ac-x1',
+            description: 'Formal protocol specification published in repository.',
+            status: 'supported',
+            explanation: 'Specification document merged in PR #5.'
+          }
+        ]
+      }
+    ]
   }
 ];
 

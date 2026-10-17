@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import { verifyFirebaseIdToken, checkAgreementAuthorization } from './auth';
 import { HumanDecision } from '../types';
-import { getAuthoritativeAgreement } from './agreementStore';
+import { getAuthoritativeAgreement, getAuthoritativeAgreementsForUser } from './agreementStore';
 import type { JWTVerifyGetKey } from 'jose';
 import { parseGithubRepoUrl, fetchGithubEvidence } from './github';
 import { evaluateMilestone } from './evaluator';
@@ -150,6 +150,47 @@ export async function handleApiRequest(
   if (url.pathname === '/api/v1/health' && req.method === 'GET') {
     res.statusCode = 200;
     res.end(JSON.stringify({ status: 'ok', timestamp: new Date().toISOString(), persistence: 'firestore' }));
+    return true;
+  }
+
+  // Protected: Agreement Listing for Authenticated User
+  if (url.pathname === '/api/v1/agreements' && req.method === 'GET') {
+    const authHeader = req.headers['authorization'];
+    const authResult = await verifyFirebaseIdToken(authHeader, customKeySet);
+
+    if (!authResult.valid || !authResult.user) {
+      res.statusCode = 401;
+      res.end(JSON.stringify({ error: authResult.error }));
+      return true;
+    }
+
+    const rawToken = authHeader?.split(' ')[1];
+    const authorizedAgreements = await getAuthoritativeAgreementsForUser(
+      authResult.user,
+      rawToken,
+      customFetchFn
+    );
+
+    if (authorizedAgreements === null) {
+      res.statusCode = 502;
+      res.end(JSON.stringify({
+        error: {
+          code: 'PERSISTENCE_UNAVAILABLE',
+          message: 'Authoritative funding agreement data could not be retrieved from Firestore.'
+        }
+      }));
+      return true;
+    }
+
+    res.statusCode = 200;
+    res.end(JSON.stringify({
+      agreements: authorizedAgreements.map(item => ({
+        ...item.agreement,
+        userRole: item.role
+      })),
+      total: authorizedAgreements.length,
+      userId: authResult.user.uid
+    }));
     return true;
   }
 

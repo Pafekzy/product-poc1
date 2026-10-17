@@ -1,6 +1,7 @@
 import { FundingAgreement } from '../types';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { initialFundingAgreements } from '../data/mockData';
+import { checkAgreementAuthorization, AuthenticatedUser } from './auth';
 
 // Authoritative in-memory agreement registry for server execution and test isolation
 const authoritativeRegistry = new Map<string, FundingAgreement>();
@@ -143,3 +144,158 @@ export async function getAuthoritativeAgreement(
   // 3. Fail closed: Return null. Never invent or return unauthorized fixtures.
   return null;
 }
+
+/**
+ * Resolves all agreements for which the authenticated user is an authorized participant (Grantor or Grantee).
+ * - In test environment, queries the isolated authoritativeRegistry.
+ * - In production, queries the Cloud Firestore REST runQuery API using the caller's verified Bearer token.
+ * - Returns null if authoritative data cannot be retrieved (fails closed, never silently substitutes mock agreements in production).
+ */
+export async function getAuthoritativeAgreementsForUser(
+  user: AuthenticatedUser,
+  rawIdToken?: string,
+  customFetchFn: typeof fetch = fetch
+): Promise<Array<{ agreement: FundingAgreement; role: 'Grantor' | 'Grantee' }> | null> {
+  if (!user || !user.uid) {
+    return null;
+  }
+
+  // 1. In hermetic test mode with default fetch, resolve via authoritative test registry
+  if ((process.env.NODE_ENV === 'test' || process.env.VITEST) && customFetchFn === fetch) {
+    const results: Array<{ agreement: FundingAgreement; role: 'Grantor' | 'Grantee' }> = [];
+    for (const agreement of authoritativeRegistry.values()) {
+      const auth = checkAgreementAuthorization(user, agreement);
+      if (auth.authorized && auth.role) {
+        results.push({ agreement, role: auth.role });
+      }
+    }
+    return results;
+  }
+
+  // 2. Production: Live Cloud Firestore REST resolution with user's verified Bearer token
+  if (rawIdToken && rawIdToken.split('.').length === 3) {
+    try {
+      const projectId = firebaseConfig.projectId;
+      const databaseId = firebaseConfig.firestoreDatabaseId || '(default)';
+      const runQueryUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/${databaseId}/documents:runQuery`;
+
+      const userEmail = user.email?.trim().toLowerCase();
+      const filters: any[] = [
+        {
+          fieldFilter: {
+            field: { fieldPath: 'grantorId' },
+            op: 'EQUAL',
+            value: { stringValue: user.uid }
+          }
+        },
+        {
+          fieldFilter: {
+            field: { fieldPath: 'granteeId' },
+            op: 'EQUAL',
+            value: { stringValue: user.uid }
+          }
+        }
+      ];
+
+      if (user.email_verified && userEmail) {
+        filters.push({
+          fieldFilter: {
+            field: { fieldPath: 'grantorEmail' },
+            op: 'EQUAL',
+            value: { stringValue: userEmail }
+          }
+        });
+        filters.push({
+          fieldFilter: {
+            field: { fieldPath: 'granteeEmail' },
+            op: 'EQUAL',
+            value: { stringValue: userEmail }
+          }
+        });
+      }
+
+      const body = {
+        structuredQuery: {
+          from: [{ collectionId: 'funding_agreements' }],
+          where: {
+            compositeFilter: {
+              op: 'OR',
+              filters
+            }
+          }
+        }
+      };
+
+      const res = await customFetchFn(runQueryUrl, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${rawIdToken}`,
+          'Content-Type': 'application/json',
+          Accept: 'application/json'
+        },
+        body: JSON.stringify(body)
+      });
+
+      if (!res.ok) {
+        return null;
+      }
+
+      const rows = await res.json();
+      if (!Array.isArray(rows)) {
+        return [];
+      }
+
+      const results: Array<{ agreement: FundingAgreement; role: 'Grantor' | 'Grantee' }> = [];
+      const seenIds = new Set<string>();
+
+      for (const row of rows) {
+        if (!row.document || !row.document.fields) continue;
+        const f = row.document.fields;
+        const agreementId = f.id?.stringValue || row.document.name.split('/').pop();
+        if (seenIds.has(agreementId)) continue;
+        seenIds.add(agreementId);
+
+        const agreement: FundingAgreement = {
+          id: agreementId,
+          title: f.title?.stringValue || 'Untitled Agreement',
+          grantorId: f.grantorId?.stringValue || '',
+          grantorName: f.grantorName?.stringValue || '',
+          grantorEmail: f.grantorEmail?.stringValue,
+          granteeId: f.granteeId?.stringValue || '',
+          granteeName: f.granteeName?.stringValue || '',
+          granteeEmail: f.granteeEmail?.stringValue,
+          description: f.description?.stringValue || '',
+          totalCommitment: f.totalCommitment?.stringValue,
+          status: (f.status?.stringValue as any) || 'active',
+          createdAt: f.createdAt?.stringValue || new Date().toISOString(),
+          milestones: []
+        };
+
+        const auth = checkAgreementAuthorization(user, agreement);
+        if (auth.authorized && auth.role) {
+          results.push({ agreement, role: auth.role });
+        }
+      }
+
+      return results;
+    } catch {
+      return null;
+    }
+  }
+
+  // In production, NEVER fall back to in-memory fixtures. Return null if authoritative data unavailable.
+  if (!(process.env.NODE_ENV === 'test' || process.env.VITEST)) {
+    return null;
+  }
+
+  // Fallback in test runner
+  const results: Array<{ agreement: FundingAgreement; role: 'Grantor' | 'Grantee' }> = [];
+  for (const agreement of authoritativeRegistry.values()) {
+    const auth = checkAgreementAuthorization(user, agreement);
+    if (auth.authorized && auth.role) {
+      results.push({ agreement, role: auth.role });
+    }
+  }
+  return results;
+}
+

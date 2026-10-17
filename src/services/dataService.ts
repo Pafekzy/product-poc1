@@ -62,51 +62,79 @@ export function subscribeToAuth(callback: (user: User | null) => void) {
 
 // 3. Persistent Data Operations
 export async function initializeDatabase(): Promise<void> {
-  const agreementRef = doc(db, 'funding_agreements', 'fa-8041');
   try {
-    const snap = await getDoc(agreementRef);
-    if (!snap.exists()) {
-      // Seed initial agreement
-      const seed = initialFundingAgreements[0];
-      await setDoc(agreementRef, {
-        id: seed.id,
-        title: seed.title,
-        grantorId: seed.grantorId,
-        grantorName: seed.grantorName,
-        grantorEmail: seed.grantorEmail || 'imaginright.dev@gmail.com',
-        granteeId: seed.granteeId,
-        granteeName: seed.granteeName,
-        granteeEmail: seed.granteeEmail || 'grantee@example.com',
-        description: seed.description,
-        totalCommitment: seed.totalCommitment,
-        status: seed.status,
-        createdAt: seed.createdAt
-      });
+    for (const seed of initialFundingAgreements) {
+      const agreementRef = doc(db, 'funding_agreements', seed.id);
+      const snap = await getDoc(agreementRef);
+      if (!snap.exists()) {
+        await setDoc(agreementRef, {
+          id: seed.id,
+          title: seed.title,
+          grantorId: seed.grantorId,
+          grantorName: seed.grantorName,
+          grantorEmail: seed.grantorEmail,
+          granteeId: seed.granteeId,
+          granteeName: seed.granteeName,
+          granteeEmail: seed.granteeEmail,
+          description: seed.description,
+          totalCommitment: seed.totalCommitment,
+          status: seed.status,
+          createdAt: seed.createdAt
+        });
 
-      // Seed milestones
-      for (const ms of seed.milestones) {
-        const msRef = doc(db, 'funding_agreements', 'fa-8041', 'milestones', ms.id);
-        await setDoc(msRef, ms);
+        for (const ms of seed.milestones) {
+          const msRef = doc(db, 'funding_agreements', seed.id, 'milestones', ms.id);
+          await setDoc(msRef, ms);
+        }
       }
+    }
 
-      // Seed initial evaluations
-      for (const [evalId, report] of Object.entries(sampleEvaluationReports)) {
-        await setDoc(doc(db, 'evaluations', evalId), report);
+    // Seed initial evaluations
+    for (const [evalId, report] of Object.entries(sampleEvaluationReports)) {
+      const evalRef = doc(db, 'evaluations', evalId);
+      const snap = await getDoc(evalRef);
+      if (!snap.exists()) {
+        await setDoc(evalRef, report);
       }
+    }
 
-      // Seed initial audit logs
-      for (const log of initialAuditLogs) {
-        await setDoc(doc(db, 'audit_logs', log.id), log);
+    // Seed initial audit logs
+    for (const log of initialAuditLogs) {
+      const logRef = doc(db, 'audit_logs', log.id);
+      const snap = await getDoc(logRef);
+      if (!snap.exists()) {
+        await setDoc(logRef, log);
       }
     }
   } catch (error) {
-    handleFirestoreError(error, OperationType.GET, 'funding_agreements/fa-8041');
+    console.warn('Database initialization deferred or offline:', error);
   }
+}
+
+export async function fetchAuthorizedAgreements(
+  idToken: string
+): Promise<Array<FundingAgreement & { userRole?: 'Grantor' | 'Grantee' }>> {
+  const res = await fetch('/api/v1/agreements', {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${idToken}`,
+      Accept: 'application/json'
+    }
+  });
+
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.error?.message || `Failed to fetch agreements (HTTP ${res.status})`);
+  }
+
+  const data = await res.json();
+  return data.agreements || [];
 }
 
 export function subscribeFundingAgreement(
   agreementId: string,
-  onAgreementUpdate: (agreement: FundingAgreement) => void
+  onAgreementUpdate: (agreement: FundingAgreement) => void,
+  onError?: (err: any) => void
 ) {
   const agreementRef = doc(db, 'funding_agreements', agreementId);
   const milestonesCol = collection(db, 'funding_agreements', agreementId, 'milestones');
@@ -131,7 +159,10 @@ export function subscribeFundingAgreement(
         updateCombined();
       }
     },
-    err => handleFirestoreError(err, OperationType.GET, `funding_agreements/${agreementId}`)
+    err => {
+      if (onError) onError(err);
+      else console.warn(`Firestore agreement subscription warning for ${agreementId}:`, err);
+    }
   );
 
   const unsubMilestones = onSnapshot(
@@ -140,7 +171,10 @@ export function subscribeFundingAgreement(
       currentMilestones = snapshot.docs.map(d => d.data() as Milestone);
       updateCombined();
     },
-    err => handleFirestoreError(err, OperationType.LIST, `funding_agreements/${agreementId}/milestones`)
+    err => {
+      if (onError) onError(err);
+      else console.warn(`Firestore milestones subscription warning for ${agreementId}:`, err);
+    }
   );
 
   return () => {

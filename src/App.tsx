@@ -51,7 +51,8 @@ import {
   saveDecisionToFirestore,
   saveEvaluationToFirestore,
   subscribeAuditLogs,
-  logAuditEventToFirestore
+  logAuditEventToFirestore,
+  fetchAuthorizedAgreements
 } from './services/dataService';
 
 type NavigationTab = 
@@ -65,15 +66,41 @@ type NavigationTab =
 export default function App() {
   const [activeTab, setActiveTab] = useState<NavigationTab>('dashboard');
   const navScrollRef = useRef<HTMLElement>(null);
+  const [availableAgreements, setAvailableAgreements] = useState<FundingAgreement[]>(initialFundingAgreements);
+  const [selectedAgreementId, setSelectedAgreementId] = useState<string>('fa-8041');
   const [currentAgreement, setCurrentAgreement] = useState<FundingAgreement>(initialFundingAgreements[0]);
   const [selectedMilestoneId, setSelectedMilestoneId] = useState<string>('ms-01');
   const [evaluations, setEvaluations] = useState<Record<string, EvaluationReport>>(sampleEvaluationReports);
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>(initialAuditLogs);
+  const [agreementsLoading, setAgreementsLoading] = useState<boolean>(false);
 
   // Authentication & Connection state
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [dbConnected, setDbConnected] = useState<boolean>(false);
   const [authLoading, setAuthLoading] = useState<boolean>(true);
+
+  // Active Agreement Ref to prevent stale async responses from overwriting newly selected agreement
+  const activeAgreementIdRef = useRef<string>('fa-8041');
+  useEffect(() => {
+    activeAgreementIdRef.current = selectedAgreementId;
+  }, [selectedAgreementId]);
+
+  // Dynamically compute caller's role on the selected agreement from cryptographic auth identity
+  const userRole: 'Grantor' | 'Grantee' | 'Observer' = (() => {
+    if (!currentUser) return 'Observer';
+    const emailVerified = currentUser.emailVerified;
+    const userEmail = currentUser.email?.trim().toLowerCase();
+    const grantorEmail = currentAgreement.grantorEmail?.trim().toLowerCase();
+    const granteeEmail = currentAgreement.granteeEmail?.trim().toLowerCase();
+
+    if (currentAgreement.grantorId === currentUser.uid || (emailVerified && grantorEmail && userEmail && grantorEmail === userEmail)) {
+      return 'Grantor';
+    }
+    if (currentAgreement.granteeId === currentUser.uid || (emailVerified && granteeEmail && userEmail && granteeEmail === userEmail)) {
+      return 'Grantee';
+    }
+    return 'Observer';
+  })();
 
   // Modal & Async states
   const [isEvaluating, setIsEvaluating] = useState<boolean>(false);
@@ -83,7 +110,6 @@ export default function App() {
 
   // Review Form state
   const [reviewerName, setReviewerName] = useState<string>('Elena Vance');
-  const [reviewerRole, setReviewerRole] = useState<'Grantor' | 'Reviewer'>('Grantor');
   const [decisionChoice, setDecisionChoice] = useState<'approved' | 'rejected' | 'changes_requested'>('approved');
   const [decisionReasoning, setDecisionReasoning] = useState<string>('');
   const [decisionFeedback, setDecisionFeedback] = useState<{ type: 'error' | 'success'; message: string } | null>(null);
@@ -102,7 +128,29 @@ export default function App() {
   const [isFetchingEvidence, setIsFetchingEvidence] = useState<boolean>(false);
   const [evidenceNotice, setEvidenceNotice] = useState<{ type: 'error' | 'success' | 'info'; message: string } | null>(null);
 
+  const handleSelectAgreement = (newAgreementId: string, customList?: FundingAgreement[]) => {
+    const listToSearch = customList || availableAgreements;
+    const target = listToSearch.find(a => a.id === newAgreementId);
+    if (!target) return;
+
+    activeAgreementIdRef.current = newAgreementId;
+    setSelectedAgreementId(newAgreementId);
+    setCurrentAgreement(target);
+
+    // Requirement 4: Reset selected milestone, stale evaluations, review feedback, and agreement-specific UI state
+    setSelectedMilestoneId(target.milestones[0]?.id || '');
+    setDecisionFeedback(null);
+    setDecisionReasoning('');
+    setEvalNotice(null);
+    setEvidenceNotice(null);
+    setLiveEvidence(null);
+    setEvidenceViewMode('sample');
+    setIsEvaluating(false);
+    setEvaluatingMilestoneId(null);
+  };
+
   const handleFetchLiveEvidence = async () => {
+    const targetAgreementId = currentAgreement.id;
     setIsFetchingEvidence(true);
     setEvidenceNotice(null);
 
@@ -121,7 +169,7 @@ export default function App() {
       const repoUrl = currentMilestone.repositoryUrl || 'https://github.com/Pafekzy/product-poc1';
       const queryParams = new URLSearchParams({
         repo_url: repoUrl,
-        agreement_id: currentAgreement.id
+        agreement_id: targetAgreementId
       });
 
       const res = await fetch(`/api/v1/evidence/github?${queryParams.toString()}`, {
@@ -132,6 +180,11 @@ export default function App() {
       });
 
       const data = await res.json();
+
+      // Guard against stale asynchronous responses
+      if (activeAgreementIdRef.current !== targetAgreementId) {
+        return;
+      }
 
       if (!res.ok) {
         setEvidenceNotice({
@@ -149,16 +202,20 @@ export default function App() {
         message: `Successfully retrieved live evidence from ${data.repository?.owner}/${data.repository?.repo} (${data.totalCommits} commits, ${data.totalPullRequests} pull requests).`
       });
     } catch (err: any) {
-      setEvidenceNotice({
-        type: 'error',
-        message: err.message || 'Network error retrieving GitHub evidence.'
-      });
+      if (activeAgreementIdRef.current === targetAgreementId) {
+        setEvidenceNotice({
+          type: 'error',
+          message: err.message || 'Network error retrieving GitHub evidence.'
+        });
+      }
     } finally {
-      setIsFetchingEvidence(false);
+      if (activeAgreementIdRef.current === targetAgreementId) {
+        setIsFetchingEvidence(false);
+      }
     }
   };
 
-  // Initialize DB and subscribe to Firebase Auth & Firestore
+  // Initialize DB and subscribe to Firebase Auth
   useEffect(() => {
     testFirestoreConnection().then(connected => {
       setDbConnected(connected);
@@ -172,13 +229,6 @@ export default function App() {
       setAuthLoading(false);
       if (user?.displayName) {
         setReviewerName(user.displayName);
-      }
-    });
-
-    // Subscribe to Firestore for real-time, durable agreement updates
-    const unsubAgreement = subscribeFundingAgreement('fa-8041', updatedAgreement => {
-      if (updatedAgreement) {
-        setCurrentAgreement(updatedAgreement);
       }
     });
 
@@ -198,11 +248,64 @@ export default function App() {
 
     return () => {
       unsubAuth();
-      unsubAgreement();
       unsubEvaluations();
       unsubAudit();
     };
   }, []);
+
+  // Dynamically subscribe to the active funding agreement
+  useEffect(() => {
+    if (!dbConnected) return;
+
+    const unsubAgreement = subscribeFundingAgreement(
+      selectedAgreementId,
+      updatedAgreement => {
+        // Prevent stale async callback if user switched agreements
+        if (activeAgreementIdRef.current !== selectedAgreementId) return;
+        if (updatedAgreement) {
+          setCurrentAgreement(updatedAgreement);
+          setAvailableAgreements(prev =>
+            prev.map(a => a.id === updatedAgreement.id ? updatedAgreement : a)
+          );
+        }
+      },
+      err => {
+        console.warn(`Firestore agreement subscription warning for ${selectedAgreementId}:`, err);
+      }
+    );
+
+    return () => {
+      unsubAgreement();
+    };
+  }, [selectedAgreementId, dbConnected]);
+
+  // Load authorized agreements when authenticated user changes
+  useEffect(() => {
+    if (!currentUser) {
+      setAvailableAgreements(initialFundingAgreements);
+      return;
+    }
+
+    setAgreementsLoading(true);
+    currentUser.getIdToken().then(async idToken => {
+      try {
+        const authorized = await fetchAuthorizedAgreements(idToken);
+        if (authorized && authorized.length > 0) {
+          setAvailableAgreements(authorized);
+          if (!authorized.some(a => a.id === activeAgreementIdRef.current)) {
+            handleSelectAgreement(authorized[0].id, authorized);
+          }
+        }
+      } catch (err: any) {
+        console.warn('Could not fetch authorized agreements:', err);
+      } finally {
+        setAgreementsLoading(false);
+      }
+    }).catch(err => {
+      console.warn('Token error:', err);
+      setAgreementsLoading(false);
+    });
+  }, [currentUser]);
 
   // Ensure active navigation tab is scrolled into view smoothly on mobile screens
   useEffect(() => {
@@ -247,6 +350,8 @@ export default function App() {
 
   // Handle running an AI evaluation
   const handleRunEvaluation = async (milestone: Milestone) => {
+    const targetAgreementId = currentAgreement.id;
+
     // 1. Validate that the milestone and its acceptance criteria exist
     if (!milestone) {
       setEvalNotice({
@@ -297,7 +402,7 @@ export default function App() {
         headers,
         body: JSON.stringify({
           project_name: currentAgreement.title,
-          agreement_id: currentAgreement.id,
+          agreement_id: targetAgreementId,
           milestone_id: milestone.id,
           repository_url: milestone.repositoryUrl || 'https://github.com/example/community-tools',
           milestone: {
@@ -317,6 +422,11 @@ export default function App() {
       }
 
       const newEvaluation: EvaluationReport = await apiRes.json();
+
+      // Guard against stale asynchronous responses
+      if (activeAgreementIdRef.current !== targetAgreementId) {
+        return;
+      }
 
       setEvaluations(prev => ({ ...prev, [newEvaluation.evaluation_id]: newEvaluation }));
 
@@ -401,6 +511,8 @@ export default function App() {
     setIsSubmittingDecision(true);
     setDecisionFeedback(null);
 
+    const targetAgreementId = currentAgreement.id;
+
     // 1. Server-side Authorization Check
     try {
       const idToken = await currentUser.getIdToken();
@@ -411,13 +523,17 @@ export default function App() {
           'Authorization': `Bearer ${idToken}`
         },
         body: JSON.stringify({
-          agreement_id: currentAgreement.id,
+          agreement_id: targetAgreementId,
           milestone_id: currentMilestone.id,
           evaluation_id: currentMilestone.evaluationId,
           status: decisionChoice,
           reasoning: decisionReasoning
         })
       });
+
+      if (activeAgreementIdRef.current !== targetAgreementId) {
+        return;
+      }
 
       if (!serverRes.ok) {
         const errPayload = await serverRes.json().catch(() => ({}));
@@ -429,17 +545,19 @@ export default function App() {
         return;
       }
     } catch (networkErr: any) {
-      setDecisionFeedback({
-        type: 'error',
-        message: `Authorization verification failed: ${networkErr.message || 'Network error'}.`
-      });
-      setIsSubmittingDecision(false);
+      if (activeAgreementIdRef.current === targetAgreementId) {
+        setDecisionFeedback({
+          type: 'error',
+          message: `Authorization verification failed: ${networkErr.message || 'Network error'}.`
+        });
+        setIsSubmittingDecision(false);
+      }
       return;
     }
 
     const newDecision: HumanDecision = {
       decision_id: `dec-${Date.now()}`,
-      agreement_id: currentAgreement.id,
+      agreement_id: targetAgreementId,
       milestone_id: currentMilestone.id,
       evaluation_id: currentMilestone.evaluationId,
       reviewer_name: currentUser.displayName || reviewerName,
@@ -456,7 +574,7 @@ export default function App() {
 
     try {
       // 2. Persist to Cloud Firestore
-      await saveDecisionToFirestore(currentAgreement.id, currentMilestone.id, newDecision);
+      await saveDecisionToFirestore(targetAgreementId, currentMilestone.id, newDecision);
       decisionPersisted = true;
 
       // 3. Audit log
@@ -468,7 +586,7 @@ export default function App() {
         action: `Recorded Human Decision: ${decisionChoice.toUpperCase()}`,
         entityType: 'HumanDecision',
         entityId: newDecision.decision_id,
-        agreementId: currentAgreement.id,
+        agreementId: targetAgreementId,
         milestoneId: currentMilestone.id,
         details: `Milestone "${currentMilestone.title}" decision: ${decisionChoice}. Reason: "${decisionReasoning}"`
       };
@@ -478,6 +596,10 @@ export default function App() {
         auditPersisted = true;
       } catch (auditErr) {
         console.warn('Audit log write deferred:', auditErr);
+      }
+
+      if (activeAgreementIdRef.current !== targetAgreementId) {
+        return;
       }
 
       // 4. Update local agreement milestone state
@@ -691,6 +813,55 @@ export default function App() {
 
       {/* Main Content Canvas */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6">
+        {/* Agreement Selector & Scoped Role Bar */}
+        <div className="mb-4 sm:mb-6 bg-white rounded-xl border border-[#DCE3E9] p-3.5 sm:p-4 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-3">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3 min-w-0 flex-1">
+            <div className="flex items-center gap-2 shrink-0">
+              <FolderGit2 className="w-5 h-5 text-[#167D72] shrink-0" />
+              <span className="text-xs font-bold uppercase tracking-wider text-[#5B6673]">Funding Agreement:</span>
+            </div>
+            <div className="flex-1 min-w-0 max-w-xl">
+              <select
+                value={selectedAgreementId}
+                onChange={e => handleSelectAgreement(e.target.value)}
+                disabled={agreementsLoading}
+                className="w-full text-xs sm:text-sm font-semibold text-[#142C3E] bg-[#F5F7F9] border border-[#DCE3E9] rounded-lg px-3 py-2 focus:outline-none focus:border-[#167D72] cursor-pointer"
+                aria-label="Select Funding Agreement"
+                data-testid="agreement-selector"
+              >
+                {availableAgreements.map(ag => (
+                  <option key={ag.id} value={ag.id}>
+                    [{ag.id.toUpperCase()}] {ag.title}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0 self-start md:self-auto flex-wrap">
+            {/* Mode Indicator */}
+            <span className={`text-[11px] font-mono font-medium px-2.5 py-1 rounded-md border ${
+              currentUser
+                ? 'bg-[#E6F4F2] text-[#167D72] border-[#A8DDD7]'
+                : 'bg-[#EEF2F6] text-[#5B6673] border-[#DCE3E9]'
+            }`}>
+              {currentUser ? 'Authenticated Scope' : 'Demo Mode (Sample)'}
+            </span>
+
+            {/* Computed Role Badge */}
+            <span className={`text-[11px] font-mono font-bold px-2.5 py-1 rounded-md border flex items-center gap-1.5 ${
+              userRole === 'Grantor'
+                ? 'bg-[#E6F4F2] text-[#167D72] border-[#A8DDD7]'
+                : userRole === 'Grantee'
+                ? 'bg-[#EAF2F8] text-[#1E5F8B] border-[#BBD5E8]'
+                : 'bg-[#FFF8E6] text-[#8C5E00] border-[#F2D696]'
+            }`}>
+              <UserCheck className="w-3.5 h-3.5 shrink-0" />
+              Role: {userRole === 'Grantor' ? 'Grantor (Authorized Signer)' : userRole === 'Grantee' ? 'Grantee (Recipient)' : 'Observer'}
+            </span>
+          </div>
+        </div>
+
         {/* Banner Alert if Human Review is Pending */}
         {currentMilestone && !currentMilestone.humanDecision && currentMilestone.evaluationId && (
           <div className="mb-4 sm:mb-6 p-3.5 sm:p-4 bg-[#FFF1D6] border border-[#F2D696] rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
@@ -1665,16 +1836,25 @@ export default function App() {
                 Record Review Decision for "{currentMilestone.title}"
               </h2>
 
+              {userRole === 'Grantee' && (
+                <div className="mb-4 p-3.5 sm:p-4 rounded-xl bg-[#FFF8E6] border border-[#F2D696] text-[#8C5E00] flex items-start gap-2.5">
+                  <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5" />
+                  <div className="text-xs sm:text-sm">
+                    <strong>Action Restricted to Grantor:</strong> You are participating as the <strong>Grantee</strong> on Funding Agreement <strong>{currentAgreement.id}</strong>. In accordance with VeriCommit authorization rules, only the designated Grantor may record and sign official milestone verification decisions.
+                  </div>
+                </div>
+              )}
+
               <form onSubmit={handleRecordDecision} className="space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4">
                   <div>
                     <label className="block text-xs font-medium text-[#5B6673] mb-1">
-                      Reviewer Full Name
+                      Reviewer Identity
                     </label>
                     <input
                       type="text"
                       value={reviewerName}
-                      disabled={isSubmittingDecision}
+                      disabled={isSubmittingDecision || userRole === 'Grantee'}
                       onChange={e => setReviewerName(e.target.value)}
                       required
                       className="w-full text-xs sm:text-sm px-3 py-2.5 rounded-lg border border-[#DCE3E9] focus:outline-none focus:border-[#142C3E] disabled:bg-gray-100 min-h-[44px]"
@@ -1682,17 +1862,18 @@ export default function App() {
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-[#5B6673] mb-1">
-                      Authorized Role
+                      Verified Role for this Agreement
                     </label>
-                    <select
-                      value={reviewerRole}
-                      disabled={isSubmittingDecision}
-                      onChange={e => setReviewerRole(e.target.value as 'Grantor' | 'Reviewer')}
-                      className="w-full text-xs sm:text-sm px-3 py-2.5 rounded-lg border border-[#DCE3E9] focus:outline-none focus:border-[#142C3E] bg-white disabled:bg-gray-100 min-h-[44px]"
-                    >
-                      <option value="Grantor">Grantor Representative</option>
-                      <option value="Reviewer">Independent Milestone Evaluator</option>
-                    </select>
+                    <div className="w-full text-xs sm:text-sm px-3 py-2.5 rounded-lg border border-[#DCE3E9] bg-[#F5F7F9] flex items-center gap-2 min-h-[44px]">
+                      <UserCheck className="w-4 h-4 text-[#167D72] shrink-0" />
+                      <span className="font-semibold text-[#142C3E]">
+                        {userRole === 'Grantor'
+                          ? 'Grantor (Authorized Signer)'
+                          : userRole === 'Grantee'
+                          ? 'Grantee (Unauthorized for Signatures)'
+                          : 'Observer (Demo Mode)'}
+                      </span>
+                    </div>
                   </div>
                 </div>
 
@@ -1743,11 +1924,15 @@ export default function App() {
                 <div className="pt-2 flex flex-col sm:flex-row sm:justify-end">
                   <button
                     type="submit"
-                    disabled={isSubmittingDecision}
+                    disabled={isSubmittingDecision || userRole === 'Grantee'}
                     className="w-full sm:w-auto px-5 py-2.5 bg-[#142C3E] disabled:bg-gray-400 text-white text-xs sm:text-sm font-semibold rounded-lg hover:bg-[#1E3E56] transition shadow-xs flex items-center justify-center gap-2 min-h-[44px]"
                   >
                     <UserCheck className="w-4 h-4 text-[#167D72]" />
-                    {isSubmittingDecision ? 'Verifying & Recording...' : 'Record & Sign Decision'}
+                    {userRole === 'Grantee'
+                      ? 'Decision Restricted to Grantor'
+                      : isSubmittingDecision
+                      ? 'Verifying & Recording...'
+                      : 'Record & Sign Decision'}
                   </button>
                 </div>
               </form>
