@@ -6,8 +6,10 @@ export const initialFundingAgreements: FundingAgreement[] = [
     title: 'Decentralized Public Goods Tooling Grant',
     grantorId: 'g-101',
     grantorName: 'Open Web Stewardship Foundation',
+    grantorEmail: 'imaginright.dev@gmail.com',
     granteeId: 'ge-202',
     granteeName: 'Decentralized Builders Collective',
+    granteeEmail: 'grantee@example.com',
     description: 'Grant to build open-source evidence and verification tooling for decentralized software milestones.',
     totalCommitment: '$45,000 USD',
     status: 'active',
@@ -93,6 +95,9 @@ export const initialFundingAgreements: FundingAgreement[] = [
 export const sampleEvaluationReports: Record<string, EvaluationReport> = {
   'eval-demo-001': {
     evaluation_id: 'eval-demo-001',
+    agreement_id: 'fa-8041',
+    milestone_id: 'ms-01',
+    repository_url: 'https://github.com/example/community-tools',
     project_name: 'Community Tools',
     milestone_title: 'Implement member registration & validation',
     overall_summary: 'Some evidence supports progress, but not every acceptance criterion is demonstrated. One criterion is supported, one lacks sufficient repository evidence, and test coverage remains uncertain.',

@@ -45,6 +45,8 @@ import {
   logoutUser,
   initializeDatabase,
   subscribeFundingAgreement,
+  subscribeEvaluations,
+  getEvaluationFromFirestore,
   saveMilestoneToFirestore,
   saveDecisionToFirestore,
   saveEvaluationToFirestore,
@@ -84,7 +86,8 @@ export default function App() {
   const [reviewerRole, setReviewerRole] = useState<'Grantor' | 'Reviewer'>('Grantor');
   const [decisionChoice, setDecisionChoice] = useState<'approved' | 'rejected' | 'changes_requested'>('approved');
   const [decisionReasoning, setDecisionReasoning] = useState<string>('');
-  const [decisionFeedback, setDecisionFeedback] = useState<string | null>(null);
+  const [decisionFeedback, setDecisionFeedback] = useState<{ type: 'error' | 'success'; message: string } | null>(null);
+  const [isSubmittingDecision, setIsSubmittingDecision] = useState<boolean>(false);
 
   // Create Milestone Modal state
   const [showNewMilestoneModal, setShowNewMilestoneModal] = useState<boolean>(false);
@@ -179,6 +182,13 @@ export default function App() {
       }
     });
 
+    // Subscribe to Firestore for persisted evaluations
+    const unsubEvaluations = subscribeEvaluations(savedEvals => {
+      if (savedEvals && Object.keys(savedEvals).length > 0) {
+        setEvaluations(prev => ({ ...prev, ...savedEvals }));
+      }
+    });
+
     // Subscribe to Firestore for real-time audit logs
     const unsubAudit = subscribeAuditLogs(logs => {
       if (logs && logs.length > 0) {
@@ -189,6 +199,7 @@ export default function App() {
     return () => {
       unsubAuth();
       unsubAgreement();
+      unsubEvaluations();
       unsubAudit();
     };
   }, []);
@@ -205,6 +216,21 @@ export default function App() {
 
   const currentMilestone = currentAgreement.milestones.find(m => m.id === selectedMilestoneId) || currentAgreement.milestones[0];
   const currentEvaluation = currentMilestone?.evaluationId ? evaluations[currentMilestone.evaluationId] : null;
+
+  // Fallback direct retrieval of milestone evaluation report from Cloud Firestore if not yet in state
+  useEffect(() => {
+    if (currentMilestone?.evaluationId && !evaluations[currentMilestone.evaluationId] && dbConnected) {
+      getEvaluationFromFirestore(currentMilestone.evaluationId)
+        .then(savedReport => {
+          if (savedReport) {
+            setEvaluations(prev => ({ ...prev, [savedReport.evaluation_id]: savedReport }));
+          }
+        })
+        .catch(err => {
+          console.warn('Evaluation direct fetch deferred:', err);
+        });
+    }
+  }, [currentMilestone?.evaluationId, evaluations, dbConnected]);
 
   // Handle Google Auth
   const handleAuthAction = async () => {
@@ -271,8 +297,11 @@ export default function App() {
         headers,
         body: JSON.stringify({
           project_name: currentAgreement.title,
+          agreement_id: currentAgreement.id,
+          milestone_id: milestone.id,
           repository_url: milestone.repositoryUrl || 'https://github.com/example/community-tools',
           milestone: {
+            id: milestone.id,
             title: milestone.title,
             description: milestone.description,
             acceptance_criteria: milestone.acceptanceCriteria.map(c => c.description)
@@ -291,24 +320,46 @@ export default function App() {
 
       setEvaluations(prev => ({ ...prev, [newEvaluation.evaluation_id]: newEvaluation }));
 
-      // Persist to Cloud Firestore
-      await saveEvaluationToFirestore(currentAgreement.id, milestone.id, newEvaluation);
+      let firestorePersisted = false;
+      try {
+        await saveEvaluationToFirestore(currentAgreement.id, milestone.id, newEvaluation);
+        firestorePersisted = true;
+      } catch (fsErr) {
+        console.warn('Evaluation persistence write deferred/failed:', fsErr);
+      }
+
+      // Update in-memory agreement milestone immediately
+      setCurrentAgreement(prev => ({
+        ...prev,
+        milestones: prev.milestones.map(m =>
+          m.id === milestone.id
+            ? { ...m, evaluationId: newEvaluation.evaluation_id, updatedAt: new Date().toISOString() }
+            : m
+        )
+      }));
 
       // Audit log entry
       const newAudit: AuditLogEntry = {
         id: `audit-${Date.now()}`,
         timestamp: new Date().toISOString(),
         actor: currentUser ? `${currentUser.displayName || currentUser.email} (User)` : 'AI Evaluation Service (Assisted)',
+        actor_uid: currentUser?.uid,
         action: 'Generated Evidence Assessment',
         entityType: 'Evaluation',
         entityId: newEvaluation.evaluation_id,
-        details: `Assessed evidence for Milestone "${milestone.title}" using Gemini 3.8 Flash (${newEvaluation.evidence_source.toUpperCase()} evidence). Findings persisted to Cloud Firestore.`
+        agreementId: currentAgreement.id,
+        milestoneId: milestone.id,
+        details: `Assessed evidence for Milestone "${milestone.title}" using Gemini 3.8 Flash (${newEvaluation.evidence_source.toUpperCase()} evidence). ${firestorePersisted ? 'Findings persisted to Cloud Firestore.' : 'Local session evaluation.'}`
       };
-      await logAuditEventToFirestore(newAudit);
+      try {
+        await logAuditEventToFirestore(newAudit);
+      } catch (auditErr) {
+        console.warn('Audit log write deferred:', auditErr);
+      }
 
       setEvalNotice({
         type: 'success',
-        message: `Evaluation completed successfully via Gemini 3.8 Flash against ${newEvaluation.evidence_source === 'github' ? 'live GitHub repository' : 'demonstration sample'} evidence.`
+        message: `Evaluation completed successfully via Gemini 3.8 Flash against ${newEvaluation.evidence_source === 'github' ? 'live GitHub repository' : 'demonstration sample'} evidence. ${firestorePersisted ? 'Persisted to Cloud Firestore.' : 'Notice: Unauthenticated session — report stored in local memory only. Sign in to persist findings to Cloud Firestore.'}`
       });
       setActiveTab('verification-report');
     } catch (apiErr: any) {
@@ -328,66 +379,132 @@ export default function App() {
   // Handle Recording Human Decision
   const handleRecordDecision = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmittingDecision) return;
+
     if (!decisionReasoning.trim() || decisionReasoning.trim().length < 10) {
-      setDecisionFeedback('Explicit justification and reasoning (minimum 10 characters) is required.');
+      setDecisionFeedback({
+        type: 'error',
+        message: 'Explicit justification and reasoning (minimum 10 characters) is required.'
+      });
       return;
     }
 
-    // Server-side Authorization Check if logged in
-    if (currentUser) {
-      try {
-        const idToken = await currentUser.getIdToken();
-        const serverRes = await fetch('/api/v1/decisions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${idToken}`
-          },
-          body: JSON.stringify({
-            agreement_id: currentAgreement.id,
-            milestone_id: currentMilestone.id,
-            status: decisionChoice,
-            reasoning: decisionReasoning
-          })
-        });
+    // Require authenticated session for consequential decision signing
+    if (!currentUser) {
+      setDecisionFeedback({
+        type: 'error',
+        message: 'Authentication required: In accordance with VeriCommit governance rules, only the authorized Grantor can sign milestone decisions. Please sign in with Google in the header.'
+      });
+      return;
+    }
 
-        if (!serverRes.ok) {
-          const errPayload = await serverRes.json();
-          setDecisionFeedback(`Server Authorization Denied: ${errPayload.error?.message || 'Only authorized Grantor may sign decisions.'}`);
-          return;
-        }
-      } catch (networkErr) {
-        console.warn('Server validation check failed:', networkErr);
+    setIsSubmittingDecision(true);
+    setDecisionFeedback(null);
+
+    // 1. Server-side Authorization Check
+    try {
+      const idToken = await currentUser.getIdToken();
+      const serverRes = await fetch('/api/v1/decisions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${idToken}`
+        },
+        body: JSON.stringify({
+          agreement_id: currentAgreement.id,
+          milestone_id: currentMilestone.id,
+          evaluation_id: currentMilestone.evaluationId,
+          status: decisionChoice,
+          reasoning: decisionReasoning
+        })
+      });
+
+      if (!serverRes.ok) {
+        const errPayload = await serverRes.json().catch(() => ({}));
+        setDecisionFeedback({
+          type: 'error',
+          message: `Server Authorization Denied: ${errPayload.error?.message || 'Only authorized Grantor may sign decisions.'}`
+        });
+        setIsSubmittingDecision(false);
+        return;
       }
+    } catch (networkErr: any) {
+      setDecisionFeedback({
+        type: 'error',
+        message: `Authorization verification failed: ${networkErr.message || 'Network error'}.`
+      });
+      setIsSubmittingDecision(false);
+      return;
     }
 
     const newDecision: HumanDecision = {
       decision_id: `dec-${Date.now()}`,
+      agreement_id: currentAgreement.id,
       milestone_id: currentMilestone.id,
-      reviewer_name: currentUser ? (currentUser.displayName || reviewerName) : reviewerName,
+      evaluation_id: currentMilestone.evaluationId,
+      reviewer_name: currentUser.displayName || reviewerName,
       reviewer_role: 'Grantor',
+      reviewer_uid: currentUser.uid,
+      reviewer_email: currentUser.email || undefined,
       status: decisionChoice,
       reasoning: decisionReasoning,
       recorded_at: new Date().toISOString()
     };
 
-    // Persist to Cloud Firestore
-    await saveDecisionToFirestore(currentAgreement.id, currentMilestone.id, newDecision);
+    let decisionPersisted = false;
+    let auditPersisted = false;
 
-    // Audit log
-    const audit: AuditLogEntry = {
-      id: `audit-${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      actor: currentUser ? `${currentUser.displayName || reviewerName} (Grantor)` : `${reviewerName} (Grantor)`,
-      action: `Recorded Human Decision: ${decisionChoice.toUpperCase()}`,
-      entityType: 'HumanDecision',
-      entityId: newDecision.decision_id,
-      details: `Milestone "${currentMilestone.title}" decision: ${decisionChoice}. Reason: "${decisionReasoning}"`
-    };
-    await logAuditEventToFirestore(audit);
+    try {
+      // 2. Persist to Cloud Firestore
+      await saveDecisionToFirestore(currentAgreement.id, currentMilestone.id, newDecision);
+      decisionPersisted = true;
 
-    setDecisionFeedback('Decision successfully verified by server and recorded in Cloud Firestore.');
-    setDecisionReasoning('');
+      // 3. Audit log
+      const audit: AuditLogEntry = {
+        id: `audit-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        actor: `${currentUser.displayName || reviewerName} (Grantor)`,
+        actor_uid: currentUser.uid,
+        action: `Recorded Human Decision: ${decisionChoice.toUpperCase()}`,
+        entityType: 'HumanDecision',
+        entityId: newDecision.decision_id,
+        agreementId: currentAgreement.id,
+        milestoneId: currentMilestone.id,
+        details: `Milestone "${currentMilestone.title}" decision: ${decisionChoice}. Reason: "${decisionReasoning}"`
+      };
+
+      try {
+        await logAuditEventToFirestore(audit);
+        auditPersisted = true;
+      } catch (auditErr) {
+        console.warn('Audit log write deferred:', auditErr);
+      }
+
+      // 4. Update local agreement milestone state
+      setCurrentAgreement(prev => ({
+        ...prev,
+        milestones: prev.milestones.map(m =>
+          m.id === currentMilestone.id
+            ? { ...m, humanDecision: newDecision, updatedAt: new Date().toISOString() }
+            : m
+        )
+      }));
+
+      setDecisionFeedback({
+        type: 'success',
+        message: decisionPersisted && auditPersisted
+          ? 'Decision successfully verified by server and recorded in Cloud Firestore with audit trail.'
+          : 'Decision verified and recorded in Cloud Firestore (audit log entry recorded locally).'
+      });
+      setDecisionReasoning('');
+    } catch (saveErr: any) {
+      setDecisionFeedback({
+        type: 'error',
+        message: `Server approved decision, but Cloud Firestore write failed: ${saveErr.message || 'Permission denied'}.`
+      });
+    } finally {
+      setIsSubmittingDecision(false);
+    }
   };
 
   // Handle Create Milestone
@@ -1504,9 +1621,18 @@ export default function App() {
             </div>
 
             {decisionFeedback && (
-              <div className="p-3.5 sm:p-4 bg-[#E6F4F2] border border-[#A8DDD7] text-[#167D72] rounded-xl text-xs sm:text-sm flex items-center justify-between gap-2">
-                <span className="break-words">{decisionFeedback}</span>
-                <button onClick={() => setDecisionFeedback(null)} className="text-xs font-bold underline shrink-0 min-h-[44px] px-2 flex items-center">Dismiss</button>
+              <div className={`p-3.5 sm:p-4 rounded-xl text-xs sm:text-sm flex items-center justify-between gap-2 border ${
+                decisionFeedback.type === 'error'
+                  ? 'bg-[#FDF2F2] border-[#F8B4B4] text-[#9B1C1C]'
+                  : 'bg-[#E6F4F2] border-[#A8DDD7] text-[#167D72]'
+              }`}>
+                <span className="break-words font-medium">{decisionFeedback.message}</span>
+                <button
+                  onClick={() => setDecisionFeedback(null)}
+                  className="text-xs font-bold underline shrink-0 min-h-[44px] px-2 flex items-center"
+                >
+                  Dismiss
+                </button>
               </div>
             )}
 
@@ -1545,9 +1671,10 @@ export default function App() {
                     <input
                       type="text"
                       value={reviewerName}
+                      disabled={isSubmittingDecision}
                       onChange={e => setReviewerName(e.target.value)}
                       required
-                      className="w-full text-xs sm:text-sm px-3 py-2.5 rounded-lg border border-[#DCE3E9] focus:outline-none focus:border-[#142C3E] min-h-[44px]"
+                      className="w-full text-xs sm:text-sm px-3 py-2.5 rounded-lg border border-[#DCE3E9] focus:outline-none focus:border-[#142C3E] disabled:bg-gray-100 min-h-[44px]"
                     />
                   </div>
                   <div>
@@ -1556,8 +1683,9 @@ export default function App() {
                     </label>
                     <select
                       value={reviewerRole}
+                      disabled={isSubmittingDecision}
                       onChange={e => setReviewerRole(e.target.value as 'Grantor' | 'Reviewer')}
-                      className="w-full text-xs sm:text-sm px-3 py-2.5 rounded-lg border border-[#DCE3E9] focus:outline-none focus:border-[#142C3E] bg-white min-h-[44px]"
+                      className="w-full text-xs sm:text-sm px-3 py-2.5 rounded-lg border border-[#DCE3E9] focus:outline-none focus:border-[#142C3E] bg-white disabled:bg-gray-100 min-h-[44px]"
                     >
                       <option value="Grantor">Grantor Representative</option>
                       <option value="Reviewer">Independent Milestone Evaluator</option>
@@ -1579,8 +1707,9 @@ export default function App() {
                       <button
                         type="button"
                         key={opt.val}
+                        disabled={isSubmittingDecision}
                         onClick={() => setDecisionChoice(opt.val as any)}
-                        className={`p-3 rounded-lg border text-left transition min-h-[48px] flex flex-col justify-center ${
+                        className={`p-3 rounded-lg border text-left transition min-h-[48px] flex flex-col justify-center disabled:opacity-60 ${
                           decisionChoice === opt.val
                             ? 'border-[#167D72] bg-[#E6F4F2] text-[#142C3E]'
                             : 'border-[#DCE3E9] bg-white hover:bg-gray-50'
@@ -1600,20 +1729,22 @@ export default function App() {
                   <textarea
                     rows={4}
                     value={decisionReasoning}
+                    disabled={isSubmittingDecision}
                     onChange={e => setDecisionReasoning(e.target.value)}
                     required
                     placeholder="Describe how the available evidence supports or fails to support the acceptance criteria, and detail any reviewer verifications conducted..."
-                    className="w-full text-xs sm:text-sm p-3 rounded-lg border border-[#DCE3E9] focus:outline-none focus:border-[#142C3E] leading-relaxed"
+                    className="w-full text-xs sm:text-sm p-3 rounded-lg border border-[#DCE3E9] focus:outline-none focus:border-[#142C3E] disabled:bg-gray-100 leading-relaxed"
                   />
                 </div>
 
                 <div className="pt-2 flex flex-col sm:flex-row sm:justify-end">
                   <button
                     type="submit"
-                    className="w-full sm:w-auto px-5 py-2.5 bg-[#142C3E] text-white text-xs sm:text-sm font-semibold rounded-lg hover:bg-[#1E3E56] transition shadow-xs flex items-center justify-center gap-2 min-h-[44px]"
+                    disabled={isSubmittingDecision}
+                    className="w-full sm:w-auto px-5 py-2.5 bg-[#142C3E] disabled:bg-gray-400 text-white text-xs sm:text-sm font-semibold rounded-lg hover:bg-[#1E3E56] transition shadow-xs flex items-center justify-center gap-2 min-h-[44px]"
                   >
                     <UserCheck className="w-4 h-4 text-[#167D72]" />
-                    Record & Sign Decision
+                    {isSubmittingDecision ? 'Verifying & Recording...' : 'Record & Sign Decision'}
                   </button>
                 </div>
               </form>

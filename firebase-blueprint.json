@@ -9,8 +9,10 @@
         "title": { "type": "string" },
         "grantorId": { "type": "string" },
         "grantorName": { "type": "string" },
+        "grantorEmail": { "type": "string" },
         "granteeId": { "type": "string" },
         "granteeName": { "type": "string" },
+        "granteeEmail": { "type": "string" },
         "description": { "type": "string" },
         "totalCommitment": { "type": "string" },
         "status": { "type": "string", "enum": ["active", "completed", "terminated"] },
@@ -44,8 +46,10 @@
       "type": "object",
       "properties": {
         "evaluation_id": { "type": "string" },
-        "project_name": { "type": "string" },
+        "agreement_id": { "type": "string" },
         "milestone_id": { "type": "string" },
+        "repository_url": { "type": "string" },
+        "project_name": { "type": "string" },
         "milestone_title": { "type": "string" },
         "overall_summary": { "type": "string" },
         "criteria_results": { "type": "array" },
@@ -63,15 +67,18 @@
       "type": "object",
       "properties": {
         "decision_id": { "type": "string" },
+        "agreement_id": { "type": "string" },
         "milestone_id": { "type": "string" },
+        "evaluation_id": { "type": "string" },
         "reviewer_name": { "type": "string" },
         "reviewer_role": { "type": "string" },
         "reviewer_uid": { "type": "string" },
+        "reviewer_email": { "type": "string" },
         "status": { "type": "string", "enum": ["approved", "rejected", "changes_requested"] },
         "reasoning": { "type": "string" },
         "recorded_at": { "type": "string" }
       },
-      "required": ["decision_id", "milestone_id", "reviewer_name", "reviewer_role", "status", "reasoning", "recorded_at"]
+      "required": ["decision_id", "agreement_id", "milestone_id", "reviewer_name", "reviewer_role", "status", "reasoning", "recorded_at"]
     },
     "AuditLogEntry": {
       "title": "AuditLogEntry",
@@ -85,7 +92,9 @@
         "action": { "type": "string" },
         "entityType": { "type": "string" },
         "entityId": { "type": "string" },
-        "details": { "type": "string" }
+        "details": { "type": "string" },
+        "agreementId": { "type": "string" },
+        "milestoneId": { "type": "string" }
       },
       "required": ["id", "timestamp", "actor", "action", "entityType", "entityId", "details"]
     }

@@ -27,8 +27,8 @@ service cloud.firestore {
       allow read: if isSignedIn() && (
         request.auth.uid == resource.data.grantorId ||
         request.auth.uid == resource.data.granteeId ||
-        resource.data.grantorId == 'g-101' ||
-        resource.data.granteeId == 'ge-202'
+        (resource.data.grantorEmail != null && request.auth.token.email != null && request.auth.token.email.lower() == resource.data.grantorEmail.lower()) ||
+        (resource.data.granteeEmail != null && request.auth.token.email != null && request.auth.token.email.lower() == resource.data.granteeEmail.lower())
       );
       
       allow create: if isSignedIn() && isValidId(agreementId)
@@ -38,22 +38,46 @@ service cloud.firestore {
         
       allow update: if isSignedIn() && isValidId(agreementId)
         && incoming().id == existing().id
-        && incoming().grantorId == existing().grantorId
-        && incoming().granteeId == existing().granteeId;
+        && (
+          request.auth.uid == existing().grantorId ||
+          request.auth.uid == existing().granteeId ||
+          (existing().grantorEmail != null && request.auth.token.email != null && request.auth.token.email.lower() == existing().grantorEmail.lower()) ||
+          (existing().granteeEmail != null && request.auth.token.email != null && request.auth.token.email.lower() == existing().granteeEmail.lower())
+        );
         
       allow delete: if false;
 
       // Sub-collection Milestones: Belonging strictly to the parent Funding Agreement
       match /milestones/{milestoneId} {
-        allow read: if isSignedIn();
+        allow read: if isSignedIn() && (
+          get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.grantorId == request.auth.uid ||
+          get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.granteeId == request.auth.uid ||
+          (get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.grantorEmail != null && request.auth.token.email != null && request.auth.token.email.lower() == get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.grantorEmail.lower()) ||
+          (get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.granteeEmail != null && request.auth.token.email != null && request.auth.token.email.lower() == get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.granteeEmail.lower())
+        );
+
         allow create: if isSignedIn() && isValidId(milestoneId)
           && incoming().keys().hasAll(['id', 'fundingAgreementId', 'title', 'evidenceSource', 'createdAt'])
           && incoming().fundingAgreementId == agreementId
           && incoming().title is string && incoming().title.size() <= 200
-          && incoming().evidenceSource in ['github', 'sample'];
+          && incoming().evidenceSource in ['github', 'sample']
+          && (
+            get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.grantorId == request.auth.uid ||
+            get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.granteeId == request.auth.uid ||
+            (get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.grantorEmail != null && request.auth.token.email != null && request.auth.token.email.lower() == get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.grantorEmail.lower()) ||
+            (get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.granteeEmail != null && request.auth.token.email != null && request.auth.token.email.lower() == get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.granteeEmail.lower())
+          );
+
         allow update: if isSignedIn() && isValidId(milestoneId)
           && incoming().id == existing().id
-          && incoming().fundingAgreementId == existing().fundingAgreementId;
+          && incoming().fundingAgreementId == existing().fundingAgreementId
+          && (
+            get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.grantorId == request.auth.uid ||
+            get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.granteeId == request.auth.uid ||
+            (get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.grantorEmail != null && request.auth.token.email != null && request.auth.token.email.lower() == get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.grantorEmail.lower()) ||
+            (get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.granteeEmail != null && request.auth.token.email != null && request.auth.token.email.lower() == get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.granteeEmail.lower())
+          );
+
         allow delete: if false;
       }
     }
@@ -71,10 +95,18 @@ service cloud.firestore {
     match /human_decisions/{decisionId} {
       allow read: if isSignedIn();
       allow create: if isSignedIn() && isValidId(decisionId)
-        && incoming().keys().hasAll(['decision_id', 'milestone_id', 'reviewer_name', 'reviewer_role', 'status', 'reasoning', 'recorded_at'])
+        && incoming().keys().hasAll(['decision_id', 'agreement_id', 'milestone_id', 'reviewer_name', 'reviewer_role', 'status', 'reasoning', 'recorded_at'])
         && incoming().reviewer_role == 'Grantor'
         && incoming().status in ['approved', 'rejected', 'changes_requested']
-        && incoming().reasoning is string && incoming().reasoning.size() >= 10 && incoming().reasoning.size() <= 2000;
+        && incoming().reasoning is string && incoming().reasoning.size() >= 10 && incoming().reasoning.size() <= 2000
+        && (
+          incoming().reviewer_uid == request.auth.uid ||
+          (incoming().reviewer_email != null && request.auth.token.email != null && incoming().reviewer_email.lower() == request.auth.token.email.lower())
+        )
+        && (
+          get(/databases/$(database)/documents/funding_agreements/$(incoming().agreement_id)).data.grantorId == request.auth.uid ||
+          (get(/databases/$(database)/documents/funding_agreements/$(incoming().agreement_id)).data.grantorEmail != null && request.auth.token.email != null && request.auth.token.email.lower() == get(/databases/$(database)/documents/funding_agreements/$(incoming().agreement_id)).data.grantorEmail.lower())
+        );
       allow update, delete: if false; // Decisions cannot be silently rewritten
     }
 

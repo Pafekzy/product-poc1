@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import { verifyFirebaseIdToken, checkAgreementAuthorization } from './auth';
 import { HumanDecision } from '../types';
-import { initialFundingAgreements } from '../data/mockData';
+import { getAuthoritativeAgreement } from './agreementStore';
 import type { JWTVerifyGetKey } from 'jose';
 import { parseGithubRepoUrl, fetchGithubEvidence } from './github';
 import { evaluateMilestone } from './evaluator';
@@ -21,6 +21,7 @@ export interface EvaluationRequest {
 export interface DecisionRequest {
   agreement_id: string;
   milestone_id: string;
+  evaluation_id?: string;
   status: 'approved' | 'rejected' | 'changes_requested';
   reasoning: string;
 }
@@ -164,7 +165,8 @@ export async function handleApiRequest(
       return true;
     }
 
-    const agreement = initialFundingAgreements.find(a => a.id === agreementId);
+    const rawToken = authHeader?.split(' ')[1];
+    const agreement = await getAuthoritativeAgreement(agreementId, rawToken, customFetchFn);
     if (!agreement) {
       res.statusCode = 404;
       res.end(JSON.stringify({ error: { code: 'AGREEMENT_NOT_FOUND', message: `Agreement ${agreementId} not found.` } }));
@@ -210,7 +212,8 @@ export async function handleApiRequest(
       return true;
     }
 
-    const agreement = initialFundingAgreements.find(a => a.id === parsed.agreement_id);
+    const rawToken = authHeader?.split(' ')[1];
+    const agreement = await getAuthoritativeAgreement(parsed.agreement_id, rawToken, customFetchFn);
     if (!agreement) {
       res.statusCode = 404;
       res.end(JSON.stringify({ error: { code: 'AGREEMENT_NOT_FOUND', message: `Agreement ${parsed.agreement_id} not found.` } }));
@@ -240,9 +243,13 @@ export async function handleApiRequest(
 
     const recordedDecision: HumanDecision = {
       decision_id: `dec-${Date.now()}`,
+      agreement_id: parsed.agreement_id,
       milestone_id: parsed.milestone_id,
+      evaluation_id: parsed.evaluation_id,
       reviewer_name: authResult.user.name || authResult.user.email || 'Authorized Grantor',
       reviewer_role: 'Grantor',
+      reviewer_uid: authResult.user.uid,
+      reviewer_email: authResult.user.email,
       status: parsed.status,
       reasoning: parsed.reasoning,
       recorded_at: new Date().toISOString()
@@ -291,6 +298,8 @@ export async function handleApiRequest(
       const evaluation = await evaluateMilestone({
         project_name: parsed.project_name,
         repository_url: parsed.repository_url,
+        agreement_id: parsed.agreement_id,
+        milestone_id: parsed.milestone_id || parsed.milestone?.id,
         milestone: parsed.milestone,
         evidence_source: parsed.evidence_source,
         fetchFn: customFetchFn,
@@ -349,7 +358,8 @@ export async function handleApiRequest(
       return true;
     }
 
-    const agreement = initialFundingAgreements.find((a) => a.id === agreementId);
+    const rawToken = authHeader?.split(' ')[1];
+    const agreement = await getAuthoritativeAgreement(agreementId, rawToken, customFetchFn);
     if (!agreement) {
       res.statusCode = 404;
       res.end(JSON.stringify({

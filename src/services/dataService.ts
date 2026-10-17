@@ -73,8 +73,10 @@ export async function initializeDatabase(): Promise<void> {
         title: seed.title,
         grantorId: seed.grantorId,
         grantorName: seed.grantorName,
+        grantorEmail: seed.grantorEmail || 'imaginright.dev@gmail.com',
         granteeId: seed.granteeId,
         granteeName: seed.granteeName,
+        granteeEmail: seed.granteeEmail || 'grantee@example.com',
         description: seed.description,
         totalCommitment: seed.totalCommitment,
         status: seed.status,
@@ -145,6 +147,34 @@ export function subscribeFundingAgreement(
     unsubAgreement();
     unsubMilestones();
   };
+}
+
+export function subscribeEvaluations(onUpdate: (evals: Record<string, EvaluationReport>) => void) {
+  const colRef = collection(db, 'evaluations');
+  return onSnapshot(
+    colRef,
+    snapshot => {
+      const reports: Record<string, EvaluationReport> = {};
+      snapshot.docs.forEach(docSnap => {
+        reports[docSnap.id] = docSnap.data() as EvaluationReport;
+      });
+      onUpdate(reports);
+    },
+    err => handleFirestoreError(err, OperationType.LIST, 'evaluations')
+  );
+}
+
+export async function getEvaluationFromFirestore(evaluationId: string): Promise<EvaluationReport | null> {
+  const evalRef = doc(db, 'evaluations', evaluationId);
+  try {
+    const snap = await getDoc(evalRef);
+    if (snap.exists()) {
+      return snap.data() as EvaluationReport;
+    }
+    return null;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, `evaluations/${evaluationId}`);
+  }
 }
 
 export async function saveMilestoneToFirestore(agreementId: string, milestone: Milestone): Promise<void> {

@@ -179,8 +179,12 @@ export function checkAgreementAuthorization(
   agreement: FundingAgreement,
   requiredRole?: 'Grantor' | 'Grantee'
 ): { authorized: boolean; role?: 'Grantor' | 'Grantee'; error?: { code: string; message: string } } {
-  const isGrantor = agreement.grantorId === user.uid || (agreement.grantorId === 'g-101' && user.email?.includes('grantor'));
-  const isGrantee = agreement.granteeId === user.uid || (agreement.granteeId === 'ge-202' && user.email?.includes('grantee'));
+  const userEmail = user.email?.trim().toLowerCase();
+  const grantorEmail = agreement.grantorEmail?.trim().toLowerCase();
+  const granteeEmail = agreement.granteeEmail?.trim().toLowerCase();
+
+  const isGrantor = agreement.grantorId === user.uid || Boolean(grantorEmail && userEmail && grantorEmail === userEmail);
+  const isGrantee = agreement.granteeId === user.uid || Boolean(granteeEmail && userEmail && granteeEmail === userEmail);
 
   if (!isGrantor && !isGrantee) {
     return {

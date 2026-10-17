@@ -47,8 +47,10 @@ export interface FundingAgreement {
   title: string;
   grantorId: string;
   grantorName: string;
+  grantorEmail?: string;
   granteeId: string;
   granteeName: string;
+  granteeEmail?: string;
   description: string;
   totalCommitment?: string;
   milestones: Milestone[];
@@ -69,6 +71,9 @@ export interface CriterionResult {
 
 export interface EvaluationReport {
   evaluation_id: string;
+  agreement_id?: string;
+  milestone_id?: string;
+  repository_url?: string;
   project_name: string;
   milestone_title: string;
   overall_summary: string;
@@ -82,9 +87,13 @@ export interface EvaluationReport {
 
 export interface HumanDecision {
   decision_id: string;
+  agreement_id: string;
   milestone_id: string;
+  evaluation_id?: string;
   reviewer_name: string;
   reviewer_role: 'Grantor' | 'Reviewer';
+  reviewer_uid?: string;
+  reviewer_email?: string;
   status: 'approved' | 'rejected' | 'changes_requested';
   reasoning: string;
   recorded_at: string;
@@ -94,10 +103,13 @@ export interface AuditLogEntry {
   id: string;
   timestamp: string;
   actor: string;
+  actor_uid?: string;
   action: string;
   entityType: 'FundingAgreement' | 'Milestone' | 'Evaluation' | 'HumanDecision' | 'Evidence';
   entityId: string;
   details: string;
+  agreementId?: string;
+  milestoneId?: string;
   previousState?: string;
   newState?: string;
 }

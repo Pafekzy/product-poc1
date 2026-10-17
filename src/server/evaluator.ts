@@ -25,7 +25,10 @@ export interface EvaluatorError {
 export interface EvaluateMilestoneInput {
   project_name: string;
   repository_url: string;
+  agreement_id?: string;
+  milestone_id?: string;
   milestone: {
+    id?: string;
     title: string;
     description: string;
     acceptance_criteria: string[];
@@ -206,6 +209,9 @@ export function evaluateEvidenceDeterministically(
 
   return {
     evaluation_id: `eval_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+    agreement_id: input.agreement_id || 'fa-8041',
+    milestone_id: input.milestone_id || input.milestone?.id || 'ms-01',
+    repository_url: input.repository_url,
     project_name: input.project_name,
     milestone_title: input.milestone.title,
     overall_summary: overallSummary,
@@ -530,6 +536,9 @@ Return a JSON object conforming strictly to the requested schema.`;
 
   return {
     evaluation_id: `eval_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+    agreement_id: input.agreement_id || 'fa-8041',
+    milestone_id: input.milestone_id || input.milestone?.id || 'ms-01',
+    repository_url: input.repository_url,
     project_name: input.project_name,
     milestone_title: input.milestone.title,
     overall_summary: String(parsedJson.overall_summary || 'Evidence evaluation completed against pre-agreed criteria.'),
