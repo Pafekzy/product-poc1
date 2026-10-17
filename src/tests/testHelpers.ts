@@ -40,6 +40,7 @@ export const testKeySet: JWTVerifyGetKey = async (protectedHeader) => {
 export async function createSignedFirebaseToken(overrides?: {
   uid?: string;
   email?: string;
+  email_verified?: boolean;
   expOffsetSeconds?: number;
   aud?: string;
   iss?: string;
@@ -53,7 +54,7 @@ export async function createSignedFirebaseToken(overrides?: {
 
   const signer = new SignJWT({
     email: overrides?.email ?? 'elena.grantor@example.org',
-    email_verified: true,
+    email_verified: overrides?.email_verified ?? true,
     name: 'Elena Vance'
   })
     .setProtectedHeader({ alg: 'RS256', kid: 'test-trusted-key-1' })

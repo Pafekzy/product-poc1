@@ -335,10 +335,11 @@ describe('Prompt 04: Authoritative Persistence and Agreement-Scoped Relationship
       expect(authCheck.authorized).toBe(false);
       expect(authCheck.error?.code).toBe('FORBIDDEN_CROSS_AGREEMENT_ACCESS');
 
-      // Valid grantor with exact email
+      // Valid grantor with exact verified email
       const validGrantorUser = {
         uid: 'random-fresh-uid',
-        email: 'imaginright.dev@gmail.com'
+        email: 'imaginright.dev@gmail.com',
+        email_verified: true
       };
       const validCheck = checkAgreementAuthorization(validGrantorUser, agreement, 'Grantor');
       expect(validCheck.authorized).toBe(true);

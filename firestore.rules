@@ -1,13 +1,17 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Default Deny Catch-All
+    // Default Deny Catch-All: Every unmapped path is denied
     match /{document=**} {
       allow read, write: if false;
     }
 
     function isSignedIn() {
       return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return request.auth != null && request.auth.token.email_verified == true;
     }
 
     function isValidId(id) {
@@ -22,100 +26,179 @@ service cloud.firestore {
       return resource.data;
     }
 
-    // Funding Agreements: Restricted to participants (Grantor and Grantee)
+    function agreementExists(agreementId) {
+      return exists(/databases/$(database)/documents/funding_agreements/$(agreementId));
+    }
+
+    function getAgreement(agreementId) {
+      return get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data;
+    }
+
+    function isAgreementParticipant(agreementId) {
+      return isSignedIn() && isValidId(agreementId) && agreementExists(agreementId) && (
+        getAgreement(agreementId).grantorId == request.auth.uid ||
+        getAgreement(agreementId).granteeId == request.auth.uid ||
+        (isEmailVerified() && getAgreement(agreementId).grantorEmail != null && request.auth.token.email != null && request.auth.token.email.lower() == getAgreement(agreementId).grantorEmail.lower()) ||
+        (isEmailVerified() && getAgreement(agreementId).granteeEmail != null && request.auth.token.email != null && request.auth.token.email.lower() == getAgreement(agreementId).granteeEmail.lower())
+      );
+    }
+
+    function isGrantor(agreementId) {
+      return isSignedIn() && isValidId(agreementId) && agreementExists(agreementId) && (
+        getAgreement(agreementId).grantorId == request.auth.uid ||
+        (isEmailVerified() && getAgreement(agreementId).grantorEmail != null && request.auth.token.email != null && request.auth.token.email.lower() == getAgreement(agreementId).grantorEmail.lower())
+      );
+    }
+
+    function isGrantee(agreementId) {
+      return isSignedIn() && isValidId(agreementId) && agreementExists(agreementId) && (
+        getAgreement(agreementId).granteeId == request.auth.uid ||
+        (isEmailVerified() && getAgreement(agreementId).granteeEmail != null && request.auth.token.email != null && request.auth.token.email.lower() == getAgreement(agreementId).granteeEmail.lower())
+      );
+    }
+
+    // Funding Agreements: Restricted strictly to participants (Grantor and Grantee)
     match /funding_agreements/{agreementId} {
-      allow read: if isSignedIn() && (
+      allow read: if isSignedIn() && isValidId(agreementId) && (
         request.auth.uid == resource.data.grantorId ||
         request.auth.uid == resource.data.granteeId ||
-        (resource.data.grantorEmail != null && request.auth.token.email != null && request.auth.token.email.lower() == resource.data.grantorEmail.lower()) ||
-        (resource.data.granteeEmail != null && request.auth.token.email != null && request.auth.token.email.lower() == resource.data.granteeEmail.lower())
+        (isEmailVerified() && resource.data.grantorEmail != null && request.auth.token.email != null && request.auth.token.email.lower() == resource.data.grantorEmail.lower()) ||
+        (isEmailVerified() && resource.data.granteeEmail != null && request.auth.token.email != null && request.auth.token.email.lower() == resource.data.granteeEmail.lower())
       );
-      
+
       allow create: if isSignedIn() && isValidId(agreementId)
         && incoming().keys().hasAll(['id', 'title', 'grantorId', 'granteeId', 'status', 'createdAt'])
-        && incoming().id is string && incoming().title is string && incoming().title.size() <= 200
-        && incoming().status in ['active', 'completed', 'terminated'];
-        
+        && incoming().id == agreementId
+        && incoming().title is string && incoming().title.size() <= 200
+        && incoming().status in ['active', 'completed', 'terminated']
+        && (
+          request.auth.uid == incoming().grantorId ||
+          (isEmailVerified() && incoming().grantorEmail != null && request.auth.token.email != null && request.auth.token.email.lower() == incoming().grantorEmail.lower())
+        );
+
+      // Updates: Protect identity, membership emails, and createdAt from being altered
       allow update: if isSignedIn() && isValidId(agreementId)
         && incoming().id == existing().id
+        && incoming().grantorId == existing().grantorId
+        && incoming().granteeId == existing().granteeId
+        && incoming().grantorEmail == existing().grantorEmail
+        && incoming().granteeEmail == existing().granteeEmail
+        && incoming().createdAt == existing().createdAt
         && (
-          request.auth.uid == existing().grantorId ||
-          request.auth.uid == existing().granteeId ||
-          (existing().grantorEmail != null && request.auth.token.email != null && request.auth.token.email.lower() == existing().grantorEmail.lower()) ||
-          (existing().granteeEmail != null && request.auth.token.email != null && request.auth.token.email.lower() == existing().granteeEmail.lower())
+          // Grantor may update title, description, totalCommitment, and status
+          (isGrantor(agreementId) && incoming().status in ['active', 'completed', 'terminated']) ||
+          // Grantee may only update non-status collaborative fields (status must remain unchanged)
+          (isGrantee(agreementId) && incoming().status == existing().status)
         );
-        
+
       allow delete: if false;
 
       // Sub-collection Milestones: Belonging strictly to the parent Funding Agreement
       match /milestones/{milestoneId} {
-        allow read: if isSignedIn() && (
-          get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.grantorId == request.auth.uid ||
-          get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.granteeId == request.auth.uid ||
-          (get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.grantorEmail != null && request.auth.token.email != null && request.auth.token.email.lower() == get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.grantorEmail.lower()) ||
-          (get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.granteeEmail != null && request.auth.token.email != null && request.auth.token.email.lower() == get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.granteeEmail.lower())
-        );
+        allow read: if isAgreementParticipant(agreementId);
 
         allow create: if isSignedIn() && isValidId(milestoneId)
           && incoming().keys().hasAll(['id', 'fundingAgreementId', 'title', 'evidenceSource', 'createdAt'])
+          && incoming().id == milestoneId
           && incoming().fundingAgreementId == agreementId
           && incoming().title is string && incoming().title.size() <= 200
           && incoming().evidenceSource in ['github', 'sample']
-          && (
-            get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.grantorId == request.auth.uid ||
-            get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.granteeId == request.auth.uid ||
-            (get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.grantorEmail != null && request.auth.token.email != null && request.auth.token.email.lower() == get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.grantorEmail.lower()) ||
-            (get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.granteeEmail != null && request.auth.token.email != null && request.auth.token.email.lower() == get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.granteeEmail.lower())
-          );
+          && isAgreementParticipant(agreementId)
+          // New milestones cannot be created with an unverified or forged human decision
+          && (!('humanDecision' in incoming()) || incoming().humanDecision == null);
 
         allow update: if isSignedIn() && isValidId(milestoneId)
           && incoming().id == existing().id
           && incoming().fundingAgreementId == existing().fundingAgreementId
+          && incoming().createdAt == existing().createdAt
+          && isAgreementParticipant(agreementId)
+          // Only the Grantor may attach or update humanDecision on a milestone
           && (
-            get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.grantorId == request.auth.uid ||
-            get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.granteeId == request.auth.uid ||
-            (get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.grantorEmail != null && request.auth.token.email != null && request.auth.token.email.lower() == get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.grantorEmail.lower()) ||
-            (get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.granteeEmail != null && request.auth.token.email != null && request.auth.token.email.lower() == get(/databases/$(database)/documents/funding_agreements/$(agreementId)).data.granteeEmail.lower())
+            !('humanDecision' in incoming()) ||
+            incoming().humanDecision == existing().humanDecision ||
+            isGrantor(agreementId)
           );
 
         allow delete: if false;
       }
     }
 
-    // Evaluations: Read-only snapshot records
+    // Evaluations: Read-only snapshot records, strictly scoped to agreement participants
     match /evaluations/{evaluationId} {
-      allow read: if isSignedIn();
+      allow read: if isSignedIn() && isValidId(evaluationId)
+        && 'agreement_id' in resource.data
+        && resource.data.agreement_id is string
+        && isValidId(resource.data.agreement_id)
+        && isAgreementParticipant(resource.data.agreement_id);
+
       allow create: if isSignedIn() && isValidId(evaluationId)
-        && incoming().keys().hasAll(['evaluation_id', 'project_name', 'milestone_title', 'overall_summary', 'human_review_required', 'evaluated_at'])
-        && incoming().human_review_required == true;
+        && incoming().keys().hasAll(['evaluation_id', 'agreement_id', 'milestone_id', 'project_name', 'milestone_title', 'overall_summary', 'human_review_required', 'evaluated_at'])
+        && incoming().evaluation_id == evaluationId
+        && incoming().agreement_id is string && isValidId(incoming().agreement_id)
+        && incoming().milestone_id is string && isValidId(incoming().milestone_id)
+        && incoming().human_review_required == true
+        && isAgreementParticipant(incoming().agreement_id)
+        && exists(/databases/$(database)/documents/funding_agreements/$(incoming().agreement_id)/milestones/$(incoming().milestone_id));
+
       allow update, delete: if false; // Evaluations are snapshot assessments
     }
 
     // Human Decisions: Must be Grantor role, required reasoning >= 10 chars, immutable
     match /human_decisions/{decisionId} {
-      allow read: if isSignedIn();
+      allow read: if isSignedIn() && isValidId(decisionId)
+        && 'agreement_id' in resource.data
+        && resource.data.agreement_id is string
+        && isValidId(resource.data.agreement_id)
+        && isAgreementParticipant(resource.data.agreement_id);
+
       allow create: if isSignedIn() && isValidId(decisionId)
         && incoming().keys().hasAll(['decision_id', 'agreement_id', 'milestone_id', 'reviewer_name', 'reviewer_role', 'status', 'reasoning', 'recorded_at'])
+        && incoming().decision_id == decisionId
+        && incoming().agreement_id is string && isValidId(incoming().agreement_id)
+        && incoming().milestone_id is string && isValidId(incoming().milestone_id)
         && incoming().reviewer_role == 'Grantor'
         && incoming().status in ['approved', 'rejected', 'changes_requested']
         && incoming().reasoning is string && incoming().reasoning.size() >= 10 && incoming().reasoning.size() <= 2000
+        // Reviewer UID cannot be forged: must match authenticated caller
+        && incoming().reviewer_uid == request.auth.uid
+        // Reviewer email cannot be forged if present, and must be verified
         && (
-          incoming().reviewer_uid == request.auth.uid ||
-          (incoming().reviewer_email != null && request.auth.token.email != null && incoming().reviewer_email.lower() == request.auth.token.email.lower())
+          !('reviewer_email' in incoming()) ||
+          incoming().reviewer_email == null ||
+          (isEmailVerified() && request.auth.token.email != null && incoming().reviewer_email.lower() == request.auth.token.email.lower())
         )
-        && (
-          get(/databases/$(database)/documents/funding_agreements/$(incoming().agreement_id)).data.grantorId == request.auth.uid ||
-          (get(/databases/$(database)/documents/funding_agreements/$(incoming().agreement_id)).data.grantorEmail != null && request.auth.token.email != null && request.auth.token.email.lower() == get(/databases/$(database)/documents/funding_agreements/$(incoming().agreement_id)).data.grantorEmail.lower())
-        );
+        // Only the authorized Grantor of the designated agreement may record a decision
+        && isGrantor(incoming().agreement_id)
+        // Milestone must actually exist under the designated agreement
+        && exists(/databases/$(database)/documents/funding_agreements/$(incoming().agreement_id)/milestones/$(incoming().milestone_id));
+
       allow update, delete: if false; // Decisions cannot be silently rewritten
     }
 
-    // Audit Logs: Append-Only Immutable Records
+    // Audit Logs: Append-Only Immutable Records, strictly scoped to agreement participants
     match /audit_logs/{logId} {
-      allow read: if isSignedIn();
+      allow read: if isSignedIn() && isValidId(logId)
+        && 'agreementId' in resource.data
+        && resource.data.agreementId is string
+        && isValidId(resource.data.agreementId)
+        && isAgreementParticipant(resource.data.agreementId);
+
       allow create: if isSignedIn() && isValidId(logId)
-        && incoming().keys().hasAll(['id', 'timestamp', 'actor', 'action', 'entityType', 'entityId', 'details'])
-        && incoming().details is string && incoming().details.size() <= 4000;
+        && incoming().keys().hasAll(['id', 'timestamp', 'actor', 'action', 'entityType', 'entityId', 'details', 'agreementId'])
+        && incoming().id == logId
+        && incoming().agreementId is string && isValidId(incoming().agreementId)
+        && incoming().details is string && incoming().details.size() <= 4000
+        // Actor UID cannot be forged: if present, must match authenticated caller
+        && (
+          !('actor_uid' in incoming()) ||
+          incoming().actor_uid == null ||
+          incoming().actor_uid == request.auth.uid
+        )
+        // Must be an authorized participant of the designated agreement
+        && isAgreementParticipant(incoming().agreementId)
+        // Agreement document must actually exist in the database
+        && exists(/databases/$(database)/documents/funding_agreements/$(incoming().agreementId));
+
       allow update, delete: if false; // Non-repudiable audit logs
     }
   }

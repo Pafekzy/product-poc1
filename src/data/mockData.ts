@@ -161,6 +161,7 @@ export const initialAuditLogs: AuditLogEntry[] = [
     action: 'Created Funding Agreement',
     entityType: 'FundingAgreement',
     entityId: 'fa-8041',
+    agreementId: 'fa-8041',
     details: 'Created Funding Agreement "Decentralized Public Goods Tooling Grant" with total commitment $45,000 USD.'
   },
   {
@@ -170,6 +171,8 @@ export const initialAuditLogs: AuditLogEntry[] = [
     action: 'Added Milestones',
     entityType: 'Milestone',
     entityId: 'ms-01',
+    agreementId: 'fa-8041',
+    milestoneId: 'ms-01',
     details: 'Defined Milestone 1 "Implement member registration & validation" with 3 acceptance criteria.'
   },
   {
@@ -179,6 +182,8 @@ export const initialAuditLogs: AuditLogEntry[] = [
     action: 'Evaluated Evidence',
     entityType: 'Evaluation',
     entityId: 'eval-demo-001',
+    agreementId: 'fa-8041',
+    milestoneId: 'ms-01',
     details: 'Completed evaluation of sample evidence against Milestone 1: 1 supported, 1 insufficient evidence, 1 uncertain. Flagged for human review.'
   }
 ];

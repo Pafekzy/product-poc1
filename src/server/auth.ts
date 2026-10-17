@@ -183,8 +183,8 @@ export function checkAgreementAuthorization(
   const grantorEmail = agreement.grantorEmail?.trim().toLowerCase();
   const granteeEmail = agreement.granteeEmail?.trim().toLowerCase();
 
-  const isGrantor = agreement.grantorId === user.uid || Boolean(grantorEmail && userEmail && grantorEmail === userEmail);
-  const isGrantee = agreement.granteeId === user.uid || Boolean(granteeEmail && userEmail && granteeEmail === userEmail);
+  const isGrantor = agreement.grantorId === user.uid || Boolean(user.email_verified && grantorEmail && userEmail && grantorEmail === userEmail);
+  const isGrantee = agreement.granteeId === user.uid || Boolean(user.email_verified && granteeEmail && userEmail && granteeEmail === userEmail);
 
   if (!isGrantor && !isGrantee) {
     return {

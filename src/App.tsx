@@ -540,9 +540,12 @@ export default function App() {
       id: `audit-${Date.now()}`,
       timestamp: new Date().toISOString(),
       actor: currentUser ? `${currentUser.displayName || currentUser.email} (Grantee)` : `${currentAgreement.granteeName} (Grantee)`,
+      actor_uid: currentUser?.uid,
       action: 'Created Milestone',
       entityType: 'Milestone',
       entityId: newMs.id,
+      agreementId: currentAgreement.id,
+      milestoneId: newMs.id,
       details: `Created Milestone "${newMs.title}" under Agreement "${currentAgreement.title}". Persisted to Firestore.`
     };
     await logAuditEventToFirestore(audit);
