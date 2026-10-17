@@ -104,14 +104,14 @@ export function validateDecisionRequest(body: any): ValidationErrorResult {
     };
   }
 
-  if (!body.agreement_id || typeof body.agreement_id !== 'string') {
+  if (!body.agreement_id || typeof body.agreement_id !== 'string' || body.agreement_id.trim().length === 0) {
     return {
       valid: false,
       error: { code: 'INVALID_REQUEST', message: 'agreement_id is required.' }
     };
   }
 
-  if (!body.milestone_id || typeof body.milestone_id !== 'string') {
+  if (!body.milestone_id || typeof body.milestone_id !== 'string' || body.milestone_id.trim().length === 0) {
     return {
       valid: false,
       error: { code: 'INVALID_REQUEST', message: 'milestone_id is required.' }
