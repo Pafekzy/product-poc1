@@ -24,6 +24,7 @@ import {
   Loader2
 } from 'lucide-react';
 import { FeatureCarousel } from './components/FeatureCarousel';
+import { BrandedDropdown } from './components/BrandedDropdown';
 import type { User } from 'firebase/auth';
 import {
   FundingAgreement,
@@ -859,20 +860,20 @@ export default function App() {
               <span className="text-xs font-bold uppercase tracking-wider text-[#5B6673]">Funding Agreement:</span>
             </div>
             <div className="flex-1 min-w-0 max-w-xl">
-              <select
+              <BrandedDropdown
+                id="agreement-selector"
                 value={selectedAgreementId}
-                onChange={e => handleSelectAgreement(e.target.value)}
+                onChange={handleSelectAgreement}
                 disabled={agreementsLoading}
-                className="w-full text-xs sm:text-sm font-semibold text-[#142C3E] bg-[#F5F7F9] border border-[#DCE3E9] rounded-lg px-3 py-2 focus:outline-none focus:border-[#167D72] cursor-pointer"
-                aria-label="Select Funding Agreement"
-                data-testid="agreement-selector"
-              >
-                {availableAgreements.map(ag => (
-                  <option key={ag.id} value={ag.id}>
-                    [{ag.id.toUpperCase()}] {ag.title}
-                  </option>
-                ))}
-              </select>
+                ariaLabel="Select Funding Agreement"
+                dataTestId="agreement-selector"
+                options={availableAgreements.map(ag => ({
+                  value: ag.id,
+                  label: `[${ag.id.toUpperCase()}] ${ag.title}`,
+                  badge: ag.id.toUpperCase(),
+                  secondaryText: `${ag.grantorName} • ${ag.granteeName} • ${ag.totalCommitment}`
+                }))}
+              />
             </div>
           </div>
 
@@ -900,8 +901,8 @@ export default function App() {
           </div>
         </div>
 
-        {/* Banner Alert if Human Review is Pending */}
-        {currentMilestone && !currentMilestone.humanDecision && currentMilestone.evaluationId && (
+        {/* Banner Alert on non-dashboard tabs if Human Review is Pending */}
+        {activeTab !== 'dashboard' && activeTab !== 'human-review' && currentMilestone && !currentMilestone.humanDecision && currentMilestone.evaluationId && (
           <div className="mb-4 sm:mb-6 p-3.5 sm:p-4 bg-[#FFF1D6] border border-[#F2D696] rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
             <div className="flex items-start gap-2.5 min-w-0">
               <Info className="w-5 h-5 text-[#8C5E00] shrink-0 mt-0.5" />
@@ -914,7 +915,7 @@ export default function App() {
             </div>
             <button
               onClick={() => setActiveTab('human-review')}
-              className="w-full sm:w-auto px-4 py-2.5 bg-[#142C3E] text-white text-xs sm:text-sm font-medium rounded-lg hover:bg-[#1E3E56] transition shrink-0 min-h-[44px] text-center flex items-center justify-center"
+              className="w-full sm:w-auto px-4 py-2.5 bg-[#142C3E] text-white text-xs sm:text-sm font-medium rounded-lg hover:bg-[#1E3E56] transition shrink-0 min-h-[44px] text-center flex items-center justify-center cursor-pointer"
             >
               Review Milestone
             </button>
@@ -980,7 +981,31 @@ export default function App() {
         {/* TAB 1: WORKSPACE DASHBOARD */}
         {activeTab === 'dashboard' && (
           <div className="space-y-4 sm:space-y-6">
-            {/* Agreement Header Card */}
+            {/* 1. Product Capability Showcase (ordered above Human Decision Required and Agreement details) */}
+            <FeatureCarousel />
+
+            {/* 2. Banner Alert if Human Review is Pending */}
+            {currentMilestone && !currentMilestone.humanDecision && currentMilestone.evaluationId && (
+              <div className="p-3.5 sm:p-4 bg-[#FFF1D6] border border-[#F2D696] rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs" data-testid="dashboard-human-decision-banner">
+                <div className="flex items-start gap-2.5 min-w-0">
+                  <Info className="w-5 h-5 text-[#8C5E00] shrink-0 mt-0.5" />
+                  <div className="text-sm text-[#17212B] min-w-0">
+                    <div className="font-semibold text-[#8C5E00]">Human Decision Required</div>
+                    <p className="text-xs text-[#5B6673] mt-0.5 break-words">
+                      AI evaluation is available for <strong>{currentMilestone.title}</strong>. As specified in the VeriCommit governance rules, authorized humans remain responsible for approval decisions.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setActiveTab('human-review')}
+                  className="w-full sm:w-auto px-4 py-2.5 bg-[#142C3E] text-white text-xs sm:text-sm font-medium rounded-lg hover:bg-[#1E3E56] transition shrink-0 min-h-[44px] text-center flex items-center justify-center cursor-pointer"
+                >
+                  Review Milestone
+                </button>
+              </div>
+            )}
+
+            {/* 3. Active Funding Agreement Details (Agreement Header Card) */}
             <div className="bg-white rounded-xl border border-[#DCE3E9] p-4 sm:p-6 shadow-xs">
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div className="min-w-0">
@@ -1026,9 +1051,6 @@ export default function App() {
                 </div>
               </div>
             </div>
-
-            {/* Interactive Feature Showcase Carousel */}
-            <FeatureCarousel />
 
             {/* Milestones List */}
             <div className="bg-white rounded-xl border border-[#DCE3E9] overflow-hidden shadow-xs">
