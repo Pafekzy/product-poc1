@@ -326,6 +326,354 @@ describe('VeriCommit Evaluation API & Domain Rules', () => {
   }, 10000);
 });
 
+describe('POST /api/v1/evaluations Security Hardening & Authorization Controls', () => {
+  const validMilestonePayload = {
+    project_name: 'Decentralized Community Tools',
+    agreement_id: 'fa-8041',
+    milestone_id: 'ms-01',
+    repository_url: 'https://github.com/example/community-tools',
+    milestone: {
+      id: 'ms-01',
+      title: 'Implement user registration & account confirmation',
+      description: 'Allow new members to register and verify registration',
+      acceptance_criteria: [
+        'A user can submit the registration form and receive account confirmation.',
+        'Invalid input produces clear, understandable validation errors.'
+      ]
+    },
+    evidence_source: 'sample' as const
+  };
+
+  it('1. Rejects evaluation of real agreement when Authorization header is missing with 401 UNAUTHORIZED', async () => {
+    let statusCode = 0;
+    let responseBody = '';
+
+    const mockReq: any = { method: 'POST', headers: {} };
+    const mockRes: any = {
+      setHeader: () => {},
+      set statusCode(val: number) { statusCode = val; },
+      end: (data: string) => { responseBody = data; }
+    };
+
+    const url = new URL('http://localhost:3000/api/v1/evaluations');
+    const handled = await handleApiRequest(mockReq, mockRes, url, JSON.stringify(validMilestonePayload), testKeySet);
+    expect(handled).toBe(true);
+    expect(statusCode).toBe(401);
+    const parsed = JSON.parse(responseBody);
+    expect(parsed.error.code).toBe('UNAUTHORIZED');
+  });
+
+  it('2. Rejects evaluation with invalid/forged token with 401 FORGED_SIGNATURE', async () => {
+    let statusCode = 0;
+    let responseBody = '';
+
+    const forgedToken = await createSignedFirebaseToken({ signWithForeignKey: true });
+    const mockReq: any = {
+      method: 'POST',
+      headers: { authorization: `Bearer ${forgedToken}` }
+    };
+    const mockRes: any = {
+      setHeader: () => {},
+      set statusCode(val: number) { statusCode = val; },
+      end: (data: string) => { responseBody = data; }
+    };
+
+    const url = new URL('http://localhost:3000/api/v1/evaluations');
+    await handleApiRequest(mockReq, mockRes, url, JSON.stringify(validMilestonePayload), testKeySet);
+    expect(statusCode).toBe(401);
+    const parsed = JSON.parse(responseBody);
+    expect(parsed.error.code).toBe('FORGED_SIGNATURE');
+  });
+
+  it('3. Rejects evaluation by authenticated non-participant with 403 FORBIDDEN_CROSS_AGREEMENT_ACCESS', async () => {
+    let statusCode = 0;
+    let responseBody = '';
+
+    const strangerToken = await createSignedFirebaseToken({
+      uid: 'unauthorized-stranger-999',
+      email: 'stranger@other.org'
+    });
+    const mockReq: any = {
+      method: 'POST',
+      headers: { authorization: `Bearer ${strangerToken}` }
+    };
+    const mockRes: any = {
+      setHeader: () => {},
+      set statusCode(val: number) { statusCode = val; },
+      end: (data: string) => { responseBody = data; }
+    };
+
+    const url = new URL('http://localhost:3000/api/v1/evaluations');
+    await handleApiRequest(mockReq, mockRes, url, JSON.stringify(validMilestonePayload), testKeySet);
+    expect(statusCode).toBe(403);
+    const parsed = JSON.parse(responseBody);
+    expect(parsed.error.code).toBe('FORBIDDEN_CROSS_AGREEMENT_ACCESS');
+  });
+
+  it('4. Rejects evaluation when milestone does not belong to agreement with 400 MILESTONE_NOT_IN_AGREEMENT', async () => {
+    let statusCode = 0;
+    let responseBody = '';
+
+    const grantorToken = await createSignedFirebaseToken({
+      uid: 'g-101',
+      email: 'director@grantor.org'
+    });
+    const mockReq: any = {
+      method: 'POST',
+      headers: { authorization: `Bearer ${grantorToken}` }
+    };
+    const mockRes: any = {
+      setHeader: () => {},
+      set statusCode(val: number) { statusCode = val; },
+      end: (data: string) => { responseBody = data; }
+    };
+
+    const url = new URL('http://localhost:3000/api/v1/evaluations');
+    const invalidMilestonePayload = {
+      ...validMilestonePayload,
+      milestone_id: 'ms-foreign-999',
+      milestone: {
+        ...validMilestonePayload.milestone,
+        id: 'ms-foreign-999'
+      }
+    };
+
+    await handleApiRequest(mockReq, mockRes, url, JSON.stringify(invalidMilestonePayload), testKeySet);
+    expect(statusCode).toBe(400);
+    const parsed = JSON.parse(responseBody);
+    expect(parsed.error.code).toBe('MILESTONE_NOT_IN_AGREEMENT');
+  });
+
+  it('5. Rejects evaluation when repository URL does not match milestone with 403 UNAUTHORIZED_REPOSITORY_CONTEXT', async () => {
+    let statusCode = 0;
+    let responseBody = '';
+
+    const grantorToken = await createSignedFirebaseToken({
+      uid: 'g-101',
+      email: 'director@grantor.org'
+    });
+    const mockReq: any = {
+      method: 'POST',
+      headers: { authorization: `Bearer ${grantorToken}` }
+    };
+    const mockRes: any = {
+      setHeader: () => {},
+      set statusCode(val: number) { statusCode = val; },
+      end: (data: string) => { responseBody = data; }
+    };
+
+    const url = new URL('http://localhost:3000/api/v1/evaluations');
+    const mismatchedRepoPayload = {
+      ...validMilestonePayload,
+      repository_url: 'https://github.com/unrelated/attacker-repo'
+    };
+
+    await handleApiRequest(mockReq, mockRes, url, JSON.stringify(mismatchedRepoPayload), testKeySet);
+    expect(statusCode).toBe(403);
+    const parsed = JSON.parse(responseBody);
+    expect(parsed.error.code).toBe('UNAUTHORIZED_REPOSITORY_CONTEXT');
+  });
+
+  it('6. Ensures rejected requests NEVER invoke the Gemini API evaluator or fetch evidence', async () => {
+    let geminiCalled = false;
+    const spyAiClient = {
+      models: {
+        generateContent: async () => {
+          geminiCalled = true;
+          throw new Error('Gemini must NOT be called on rejected evaluation requests');
+        }
+      }
+    };
+
+    let githubFetchCalled = false;
+    const spyFetch = (async (reqUrl: any) => {
+      if (String(reqUrl).includes('api.github.com')) {
+        githubFetchCalled = true;
+      }
+      return { ok: true, json: async () => [] };
+    }) as any;
+
+    const strangerToken = await createSignedFirebaseToken({
+      uid: 'unauthorized-stranger-999',
+      email: 'stranger@other.org'
+    });
+    const mockReq: any = {
+      method: 'POST',
+      headers: { authorization: `Bearer ${strangerToken}` }
+    };
+    const mockRes: any = {
+      setHeader: () => {},
+      statusCode: 0,
+      end: () => {}
+    };
+
+    const url = new URL('http://localhost:3000/api/v1/evaluations');
+    const liveEvidencePayload = {
+      ...validMilestonePayload,
+      evidence_source: 'github' as const
+    };
+
+    await handleApiRequest(
+      mockReq,
+      mockRes,
+      url,
+      JSON.stringify(liveEvidencePayload),
+      testKeySet,
+      spyFetch,
+      spyAiClient
+    );
+
+    expect(geminiCalled).toBe(false);
+    expect(githubFetchCalled).toBe(false);
+  });
+
+  it('7. Prohibits using sample mode to bypass agreement authorization', async () => {
+    let statusCode = 0;
+    let responseBody = '';
+
+    // A. Unauthenticated sample request targeting real agreement -> 401
+    const unauthReq: any = { method: 'POST', headers: {} };
+    const mockResA: any = {
+      setHeader: () => {},
+      set statusCode(val: number) { statusCode = val; },
+      end: (data: string) => { responseBody = data; }
+    };
+
+    const url = new URL('http://localhost:3000/api/v1/evaluations');
+    await handleApiRequest(unauthReq, mockResA, url, JSON.stringify(validMilestonePayload), testKeySet);
+    expect(statusCode).toBe(401);
+    expect(JSON.parse(responseBody).error.code).toBe('UNAUTHORIZED');
+
+    // B. Authenticated stranger sample request targeting real agreement -> 403
+    const strangerToken = await createSignedFirebaseToken({
+      uid: 'stranger-attempting-bypass',
+      email: 'stranger@fake.org'
+    });
+    const strangerReq: any = {
+      method: 'POST',
+      headers: { authorization: `Bearer ${strangerToken}` }
+    };
+    const mockResB: any = {
+      setHeader: () => {},
+      set statusCode(val: number) { statusCode = val; },
+      end: (data: string) => { responseBody = data; }
+    };
+
+    await handleApiRequest(strangerReq, mockResB, url, JSON.stringify(validMilestonePayload), testKeySet);
+    expect(statusCode).toBe(403);
+    expect(JSON.parse(responseBody).error.code).toBe('FORBIDDEN_CROSS_AGREEMENT_ACCESS');
+  });
+
+  it('8. Forces unauthenticated standalone demo sample evaluation into deterministic mode without calling Gemini', async () => {
+    let statusCode = 0;
+    let responseBody = '';
+
+    const publicDemoReq: any = { method: 'POST', headers: {} };
+    const mockRes: any = {
+      setHeader: () => {},
+      set statusCode(val: number) { statusCode = val; },
+      end: (data: string) => { responseBody = data; }
+    };
+
+    const standaloneDemoPayload = {
+      project_name: 'Standalone Demo',
+      repository_url: 'https://github.com/example/community-tools',
+      milestone: {
+        title: 'Demo Milestone',
+        description: 'Demo description',
+        acceptance_criteria: ['A user can submit registration.']
+      },
+      evidence_source: 'sample' as const
+    };
+
+    // Notice: no customAiClient passed, no GEMINI_API_KEY required. Runs deterministically.
+    const url = new URL('http://localhost:3000/api/v1/evaluations');
+    await handleApiRequest(publicDemoReq, mockRes, url, JSON.stringify(standaloneDemoPayload), testKeySet);
+
+    expect(statusCode).toBe(200);
+    const parsed = JSON.parse(responseBody);
+    expect(parsed.evaluation_id).toMatch(/^eval_/);
+    expect(parsed.human_review_required).toBe(true);
+    expect(parsed.limitations.some((l: string) => l.includes('Deterministic evaluation engine'))).toBe(true);
+  });
+
+  it('9. Rejects live GitHub evidence evaluation without agreement context with 400 AGREEMENT_CONTEXT_REQUIRED', async () => {
+    let statusCode = 0;
+    let responseBody = '';
+
+    const grantorToken = await createSignedFirebaseToken({
+      uid: 'g-101',
+      email: 'director@grantor.org'
+    });
+    const mockReq: any = {
+      method: 'POST',
+      headers: { authorization: `Bearer ${grantorToken}` }
+    };
+    const mockRes: any = {
+      setHeader: () => {},
+      set statusCode(val: number) { statusCode = val; },
+      end: (data: string) => { responseBody = data; }
+    };
+
+    const url = new URL('http://localhost:3000/api/v1/evaluations');
+    const liveWithoutAgreement = {
+      project_name: 'Live Project',
+      repository_url: 'https://github.com/example/community-tools',
+      milestone: {
+        title: 'Live Milestone',
+        description: 'Live description',
+        acceptance_criteria: ['Criterion']
+      },
+      evidence_source: 'github' as const
+    };
+
+    await handleApiRequest(mockReq, mockRes, url, JSON.stringify(liveWithoutAgreement), testKeySet);
+    expect(statusCode).toBe(400);
+    const parsed = JSON.parse(responseBody);
+    expect(parsed.error.code).toBe('AGREEMENT_CONTEXT_REQUIRED');
+  });
+
+  it('10. Allows authorized participant to evaluate an agreed milestone successfully with HTTP 200', async () => {
+    let statusCode = 0;
+    let responseBody = '';
+
+    const grantorToken = await createSignedFirebaseToken({
+      uid: 'g-101',
+      email: 'director@grantor.org'
+    });
+    const mockReq: any = {
+      method: 'POST',
+      headers: { authorization: `Bearer ${grantorToken}` }
+    };
+    const mockRes: any = {
+      setHeader: () => {},
+      set statusCode(val: number) { statusCode = val; },
+      end: (data: string) => { responseBody = data; }
+    };
+
+    const mockAiClient = createMockGeminiClient();
+    const url = new URL('http://localhost:3000/api/v1/evaluations');
+
+    await handleApiRequest(
+      mockReq,
+      mockRes,
+      url,
+      JSON.stringify(validMilestonePayload),
+      testKeySet,
+      undefined,
+      mockAiClient
+    );
+
+    expect(statusCode).toBe(200);
+    const parsed = JSON.parse(responseBody);
+    expect(parsed.evaluation_id).toMatch(/^eval_/);
+    expect(parsed.agreement_id).toBe('fa-8041');
+    expect(parsed.milestone_id).toBe('ms-01');
+    expect(parsed.human_review_required).toBe(true);
+    expect(parsed.criteria_results).toHaveLength(2);
+  });
+});
+
 describe('Audit History & Immutability Rules', () => {
   it('validates audit event creation structure with actor and target references', () => {
     const auditEntry: AuditLogEntry = {

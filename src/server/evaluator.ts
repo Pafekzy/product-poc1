@@ -40,6 +40,7 @@ export interface EvaluateMilestoneInput {
   aiClient?: any;
   timeoutMs?: number;
   mode?: 'gemini' | 'deterministic';
+  fallbackReason?: string;
 }
 
 export const SAMPLE_EVIDENCE_ITEMS: EvidenceItem[] = [
@@ -279,7 +280,11 @@ export async function evaluateMilestone(input: EvaluateMilestoneInput): Promise<
 
   // Support explicit deterministic evaluation only when explicitly requested
   if (input.mode === 'deterministic') {
-    return evaluateEvidenceDeterministically(input, evidenceItems, 'Explicit deterministic evaluation requested');
+    return evaluateEvidenceDeterministically(
+      input,
+      evidenceItems,
+      input.fallbackReason || 'Explicit deterministic evaluation requested'
+    );
   }
 
   // 2. Check for Gemini API Key (unless custom aiClient is injected)

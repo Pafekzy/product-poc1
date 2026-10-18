@@ -8,9 +8,11 @@ import { evaluateMilestone } from './evaluator';
 
 export interface EvaluationRequest {
   agreement_id?: string;
+  milestone_id?: string;
   project_name: string;
   repository_url: string;
   milestone: {
+    id?: string;
     title: string;
     description: string;
     acceptance_criteria: string[];
@@ -307,18 +309,6 @@ export async function handleApiRequest(
 
   // Protected / Contract-Conforming: Evaluations Endpoint
   if (url.pathname === '/api/v1/evaluations' && req.method === 'POST') {
-    const authHeader = req.headers['authorization'];
-    
-    // If auth header is provided, enforce cryptographic token verification
-    if (authHeader) {
-      const authResult = await verifyFirebaseIdToken(authHeader, customKeySet);
-      if (!authResult.valid) {
-        res.statusCode = 401;
-        res.end(JSON.stringify({ error: authResult.error }));
-        return true;
-      }
-    }
-
     let parsed: any;
     try {
       parsed = JSON.parse(rawBody);
@@ -335,6 +325,161 @@ export async function handleApiRequest(
       return true;
     }
 
+    const authHeader = req.headers['authorization'];
+    const isRealAgreement = Boolean(
+      parsed.agreement_id &&
+      typeof parsed.agreement_id === 'string' &&
+      parsed.agreement_id.trim().length > 0
+    );
+    const isLiveGithub = parsed.evidence_source === 'github';
+
+    // Rule: Live GitHub evidence evaluation strictly requires an established agreement context
+    if (isLiveGithub && !isRealAgreement) {
+      res.statusCode = 400;
+      res.end(JSON.stringify({
+        error: {
+          code: 'AGREEMENT_CONTEXT_REQUIRED',
+          message: 'Field "agreement_id" is required to establish authorized repository context for live evaluations.'
+        }
+      }));
+      return true;
+    }
+
+    let authenticatedUser: any = null;
+
+    // Rule A: For evaluations involving real agreements (or live GitHub source), authentication is MANDATORY.
+    if (isRealAgreement || isLiveGithub) {
+      if (!authHeader) {
+        res.statusCode = 401;
+        res.end(JSON.stringify({
+          error: {
+            code: 'UNAUTHORIZED',
+            message: 'Missing or malformed Authorization header. Expected format: Bearer <token>'
+          }
+        }));
+        return true;
+      }
+
+      const authResult = await verifyFirebaseIdToken(authHeader, customKeySet);
+      if (!authResult.valid || !authResult.user) {
+        res.statusCode = 401;
+        res.end(JSON.stringify({ error: authResult.error }));
+        return true;
+      }
+      authenticatedUser = authResult.user;
+    } else if (authHeader) {
+      // If auth header is provided in demo/sample mode, verify it
+      const authResult = await verifyFirebaseIdToken(authHeader, customKeySet);
+      if (!authResult.valid || !authResult.user) {
+        res.statusCode = 401;
+        res.end(JSON.stringify({ error: authResult.error }));
+        return true;
+      }
+      authenticatedUser = authResult.user;
+    }
+
+    let evaluationMode: 'gemini' | 'deterministic' | undefined = undefined;
+    let fallbackReason: string | undefined = undefined;
+
+    // Rule B & C: Enforce Agreement Authorization, Milestone Membership, and Repository Matching
+    if (isRealAgreement) {
+      const rawToken = authHeader?.split(' ')[1];
+      const agreement = await getAuthoritativeAgreement(parsed.agreement_id, rawToken, customFetchFn);
+
+      if (!agreement) {
+        res.statusCode = 404;
+        res.end(JSON.stringify({
+          error: {
+            code: 'AGREEMENT_NOT_FOUND',
+            message: `Funding Agreement "${parsed.agreement_id}" not found.`
+          }
+        }));
+        return true;
+      }
+
+      // Verify caller is an authorized party on this agreement (Grantor or Grantee)
+      const access = checkAgreementAuthorization(authenticatedUser, agreement);
+      if (!access.authorized) {
+        res.statusCode = 403;
+        res.end(JSON.stringify({ error: access.error }));
+        return true;
+      }
+
+      // Verify requested milestone belongs to the authoritative agreement
+      const targetMilestoneId = parsed.milestone_id || parsed.milestone?.id;
+      const targetMilestone = targetMilestoneId
+        ? agreement.milestones.find((m) => m.id === targetMilestoneId)
+        : null;
+
+      if (!targetMilestone) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({
+          error: {
+            code: 'MILESTONE_NOT_IN_AGREEMENT',
+            message: `Milestone "${targetMilestoneId || 'unspecified'}" does not belong to agreement "${parsed.agreement_id}".`
+          }
+        }));
+        return true;
+      }
+
+      // Parse and validate repository URL
+      let parsedReqRepo;
+      try {
+        parsedReqRepo = parseGithubRepoUrl(parsed.repository_url);
+      } catch (err: any) {
+        res.statusCode = err.status || 400;
+        res.end(JSON.stringify({
+          error: {
+            code: err.code || 'INVALID_REPOSITORY_URL',
+            message: err.message || 'Invalid repository URL.'
+          }
+        }));
+        return true;
+      }
+
+      // Verify repository matches the milestone's repositoryUrl or agreement milestone repository
+      let repoMatches = false;
+      if (targetMilestone.repositoryUrl) {
+        try {
+          const parsedMilestoneRepo = parseGithubRepoUrl(targetMilestone.repositoryUrl);
+          if (parsedMilestoneRepo.normalizedUrl.toLowerCase() === parsedReqRepo.normalizedUrl.toLowerCase()) {
+            repoMatches = true;
+          }
+        } catch {
+          // ignore parsing error on milestone repo
+        }
+      } else {
+        // Fallback: verify repo is associated with any milestone in the agreement
+        repoMatches = agreement.milestones.some((m) => {
+          if (!m.repositoryUrl) return false;
+          try {
+            const p = parseGithubRepoUrl(m.repositoryUrl);
+            return p.normalizedUrl.toLowerCase() === parsedReqRepo.normalizedUrl.toLowerCase();
+          } catch {
+            return false;
+          }
+        });
+      }
+
+      if (!repoMatches) {
+        res.statusCode = 403;
+        res.end(JSON.stringify({
+          error: {
+            code: 'UNAUTHORIZED_REPOSITORY_CONTEXT',
+            message: `Repository "${parsedReqRepo.normalizedUrl}" is not associated with milestone "${targetMilestone.id}" or agreement "${agreement.id}".`
+          }
+        }));
+        return true;
+      }
+    } else {
+      // Standalone sample/demo evaluation (no agreement_id)
+      // Abuse control: Unauthenticated public requests cannot trigger live Gemini API calls
+      if (!authenticatedUser && !customAiClient) {
+        evaluationMode = 'deterministic';
+        fallbackReason = 'Unauthenticated demonstration mode (deterministic evaluation)';
+      }
+    }
+
     try {
       const evaluation = await evaluateMilestone({
         project_name: parsed.project_name,
@@ -344,7 +489,9 @@ export async function handleApiRequest(
         milestone: parsed.milestone,
         evidence_source: parsed.evidence_source,
         fetchFn: customFetchFn,
-        aiClient: customAiClient
+        aiClient: customAiClient,
+        mode: evaluationMode,
+        fallbackReason
       });
 
       res.statusCode = 200;

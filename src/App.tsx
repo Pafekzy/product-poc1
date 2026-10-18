@@ -378,6 +378,14 @@ export default function App() {
       return;
     }
 
+    if (!currentUser) {
+      setEvalNotice({
+        type: 'error',
+        message: 'Authentication required. In accordance with VeriCommit security rules, please sign in with Google in the header before running milestone evaluations.'
+      });
+      return;
+    }
+
     setIsEvaluating(true);
     setEvaluatingMilestoneId(milestone.id);
     const initialStage = milestone.evidenceSource === 'github' ? 'retrieving' : 'evaluating';
