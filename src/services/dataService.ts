@@ -6,6 +6,7 @@ import {
   onSnapshot,
   query,
   orderBy,
+  where,
   getDocFromServer
 } from 'firebase/firestore';
 import {
@@ -183,10 +184,17 @@ export function subscribeFundingAgreement(
   };
 }
 
-export function subscribeEvaluations(onUpdate: (evals: Record<string, EvaluationReport>) => void) {
+export function subscribeEvaluations(
+  onUpdate: (evals: Record<string, EvaluationReport>) => void,
+  agreementId?: string,
+  onError?: (err: any) => void
+) {
   const colRef = collection(db, 'evaluations');
+  const q = agreementId
+    ? query(colRef, where('agreement_id', '==', agreementId))
+    : colRef;
   return onSnapshot(
-    colRef,
+    q,
     snapshot => {
       const reports: Record<string, EvaluationReport> = {};
       snapshot.docs.forEach(docSnap => {
@@ -194,7 +202,13 @@ export function subscribeEvaluations(onUpdate: (evals: Record<string, Evaluation
       });
       onUpdate(reports);
     },
-    err => handleFirestoreError(err, OperationType.LIST, 'evaluations')
+    err => {
+      if (onError) {
+        onError(err);
+      } else {
+        handleFirestoreError(err, OperationType.LIST, 'evaluations');
+      }
+    }
   );
 }
 
@@ -268,15 +282,29 @@ export async function saveEvaluationToFirestore(
   }
 }
 
-export function subscribeAuditLogs(onUpdate: (logs: AuditLogEntry[]) => void) {
-  const q = query(collection(db, 'audit_logs'), orderBy('timestamp', 'desc'));
+export function subscribeAuditLogs(
+  onUpdate: (logs: AuditLogEntry[]) => void,
+  agreementId?: string,
+  onError?: (err: any) => void
+) {
+  const colRef = collection(db, 'audit_logs');
+  const q = agreementId
+    ? query(colRef, where('agreementId', '==', agreementId))
+    : query(colRef, orderBy('timestamp', 'desc'));
   return onSnapshot(
     q,
     snapshot => {
       const items = snapshot.docs.map(d => d.data() as AuditLogEntry);
+      items.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
       onUpdate(items);
     },
-    err => handleFirestoreError(err, OperationType.LIST, 'audit_logs')
+    err => {
+      if (onError) {
+        onError(err);
+      } else {
+        handleFirestoreError(err, OperationType.LIST, 'audit_logs');
+      }
+    }
   );
 }
 

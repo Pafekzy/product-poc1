@@ -43,7 +43,6 @@ import {
   subscribeToAuth,
   loginWithGoogle,
   logoutUser,
-  initializeDatabase,
   subscribeFundingAgreement,
   subscribeEvaluations,
   getEvaluationFromFirestore,
@@ -219,9 +218,6 @@ export default function App() {
   useEffect(() => {
     testFirestoreConnection().then(connected => {
       setDbConnected(connected);
-      if (connected) {
-        initializeDatabase().catch(err => console.warn('DB initialization deferred:', err));
-      }
     });
 
     const unsubAuth = subscribeToAuth(user => {
@@ -232,30 +228,15 @@ export default function App() {
       }
     });
 
-    // Subscribe to Firestore for persisted evaluations
-    const unsubEvaluations = subscribeEvaluations(savedEvals => {
-      if (savedEvals && Object.keys(savedEvals).length > 0) {
-        setEvaluations(prev => ({ ...prev, ...savedEvals }));
-      }
-    });
-
-    // Subscribe to Firestore for real-time audit logs
-    const unsubAudit = subscribeAuditLogs(logs => {
-      if (logs && logs.length > 0) {
-        setAuditLogs(logs);
-      }
-    });
-
     return () => {
       unsubAuth();
-      unsubEvaluations();
-      unsubAudit();
     };
   }, []);
 
-  // Dynamically subscribe to the active funding agreement
+  // Dynamically subscribe to the active funding agreement, evaluations, and audit logs
   useEffect(() => {
-    if (!dbConnected) return;
+    // Only subscribe to Firestore when DB is connected and caller is authenticated
+    if (!dbConnected || !currentUser) return;
 
     const unsubAgreement = subscribeFundingAgreement(
       selectedAgreementId,
@@ -274,10 +255,38 @@ export default function App() {
       }
     );
 
+    const unsubEvaluations = subscribeEvaluations(
+      savedEvals => {
+        if (activeAgreementIdRef.current !== selectedAgreementId) return;
+        if (savedEvals && Object.keys(savedEvals).length > 0) {
+          setEvaluations(prev => ({ ...prev, ...savedEvals }));
+        }
+      },
+      selectedAgreementId,
+      err => {
+        console.warn(`Firestore evaluations subscription warning for ${selectedAgreementId}:`, err);
+      }
+    );
+
+    const unsubAudit = subscribeAuditLogs(
+      logs => {
+        if (activeAgreementIdRef.current !== selectedAgreementId) return;
+        if (logs && logs.length > 0) {
+          setAuditLogs(logs);
+        }
+      },
+      selectedAgreementId,
+      err => {
+        console.warn(`Firestore audit logs subscription warning for ${selectedAgreementId}:`, err);
+      }
+    );
+
     return () => {
       unsubAgreement();
+      unsubEvaluations();
+      unsubAudit();
     };
-  }, [selectedAgreementId, dbConnected]);
+  }, [selectedAgreementId, dbConnected, currentUser]);
 
   // Load authorized agreements when authenticated user changes
   useEffect(() => {
@@ -322,7 +331,7 @@ export default function App() {
 
   // Fallback direct retrieval of milestone evaluation report from Cloud Firestore if not yet in state
   useEffect(() => {
-    if (currentMilestone?.evaluationId && !evaluations[currentMilestone.evaluationId] && dbConnected) {
+    if (currentMilestone?.evaluationId && !evaluations[currentMilestone.evaluationId] && dbConnected && currentUser) {
       getEvaluationFromFirestore(currentMilestone.evaluationId)
         .then(savedReport => {
           if (savedReport) {
@@ -333,7 +342,7 @@ export default function App() {
           console.warn('Evaluation direct fetch deferred:', err);
         });
     }
-  }, [currentMilestone?.evaluationId, evaluations, dbConnected]);
+  }, [currentMilestone?.evaluationId, evaluations, dbConnected, currentUser]);
 
   // Handle Google Auth
   const handleAuthAction = async () => {
