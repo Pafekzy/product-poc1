@@ -51,7 +51,8 @@ import {
   saveEvaluationToFirestore,
   subscribeAuditLogs,
   logAuditEventToFirestore,
-  fetchAuthorizedAgreements
+  fetchAuthorizedAgreements,
+  initializeDatabase
 } from './services/dataService';
 
 type NavigationTab = 
@@ -92,10 +93,25 @@ export default function App() {
     const grantorEmail = currentAgreement.grantorEmail?.trim().toLowerCase();
     const granteeEmail = currentAgreement.granteeEmail?.trim().toLowerCase();
 
-    if (currentAgreement.grantorId === currentUser.uid || (emailVerified && grantorEmail && userEmail && grantorEmail === userEmail)) {
+    // Recognize authenticated demo user as Grantor on designated demo agreement fa-8041
+    const isDesignatedDemoGrantor = Boolean(
+      currentAgreement.id === 'fa-8041' &&
+      emailVerified &&
+      userEmail &&
+      (userEmail === 'pafekzy@gmail.com' || userEmail === 'imaginright.dev@gmail.com')
+    );
+
+    if (
+      currentAgreement.grantorId === currentUser.uid ||
+      Boolean(emailVerified && grantorEmail && userEmail && grantorEmail === userEmail) ||
+      isDesignatedDemoGrantor
+    ) {
       return 'Grantor';
     }
-    if (currentAgreement.granteeId === currentUser.uid || (emailVerified && granteeEmail && userEmail && granteeEmail === userEmail)) {
+    if (
+      currentAgreement.granteeId === currentUser.uid ||
+      Boolean(emailVerified && granteeEmail && userEmail && granteeEmail === userEmail)
+    ) {
       return 'Grantee';
     }
     return 'Observer';
@@ -225,6 +241,11 @@ export default function App() {
       setAuthLoading(false);
       if (user?.displayName) {
         setReviewerName(user.displayName);
+      }
+      if (user) {
+        initializeDatabase().catch(err => {
+          console.warn('Database initialization warning:', err);
+        });
       }
     });
 

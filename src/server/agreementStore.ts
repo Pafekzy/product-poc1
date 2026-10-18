@@ -6,9 +6,9 @@ import { checkAgreementAuthorization, AuthenticatedUser } from './auth';
 // Authoritative in-memory agreement registry for server execution and test isolation
 const authoritativeRegistry = new Map<string, FundingAgreement>();
 
-// Only seed fixture agreements when executing in hermetic test environments.
-// In production, the registry starts empty and only caches agreements authoritatively verified via Firestore.
-if (process.env.NODE_ENV === 'test' || process.env.VITEST) {
+// Seed fixture agreements in test and development environments.
+// In production (NODE_ENV === 'production'), the registry starts empty and only caches agreements authoritatively verified via Firestore.
+if (process.env.NODE_ENV !== 'production') {
   for (const ag of initialFundingAgreements) {
     authoritativeRegistry.set(ag.id, ag);
   }
@@ -66,8 +66,16 @@ export async function getAuthoritativeAgreement(
         }
       });
 
-      // If Cloud Firestore explicitly denies access or states document not found, fail closed
-      if (res.status === 404 || res.status === 403 || res.status === 401) {
+      // If Cloud Firestore explicitly denies access, fail closed immediately
+      if (res.status === 403 || res.status === 401) {
+        return null;
+      }
+
+      // If document is not found in Firestore (e.g., unseeded dev environment)
+      if (res.status === 404) {
+        if (process.env.NODE_ENV !== 'production' && authoritativeRegistry.has(agreementId)) {
+          return authoritativeRegistry.get(agreementId)!;
+        }
         return null;
       }
 
@@ -132,11 +140,11 @@ export async function getAuthoritativeAgreement(
   }
 
   // In production, NEVER fall back to in-memory registry. Fail closed.
-  if (!(process.env.NODE_ENV === 'test' || process.env.VITEST)) {
+  if (process.env.NODE_ENV === 'production') {
     return null;
   }
 
-  // 2. Authoritative Server Registry resolution (strictly for hermetic unit/integration test isolation)
+  // 2. Authoritative Server Registry resolution (for hermetic test isolation and development mode)
   if (authoritativeRegistry.has(agreementId)) {
     return authoritativeRegistry.get(agreementId)!;
   }
@@ -277,18 +285,20 @@ export async function getAuthoritativeAgreementsForUser(
         }
       }
 
-      return results;
+      if (results.length > 0) {
+        return results;
+      }
     } catch {
-      return null;
+      // Failed to execute live query
     }
   }
 
   // In production, NEVER fall back to in-memory fixtures. Return null if authoritative data unavailable.
-  if (!(process.env.NODE_ENV === 'test' || process.env.VITEST)) {
+  if (process.env.NODE_ENV === 'production') {
     return null;
   }
 
-  // Fallback in test runner
+  // Fallback in test runner and development mode when Firestore is unseeded
   const results: Array<{ agreement: FundingAgreement; role: 'Grantor' | 'Grantee' }> = [];
   for (const agreement of authoritativeRegistry.values()) {
     const auth = checkAgreementAuthorization(user, agreement);

@@ -61,19 +61,26 @@ export function subscribeToAuth(callback: (user: User | null) => void) {
   return onAuthStateChanged(auth, callback);
 }
 
-// 3. Persistent Data Operations
 export async function initializeDatabase(): Promise<void> {
   try {
+    const currentEmail = auth.currentUser?.email?.trim().toLowerCase();
+    const currentUid = auth.currentUser?.uid;
+    const isEmailVerified = Boolean(auth.currentUser?.emailVerified);
+
     for (const seed of initialFundingAgreements) {
       const agreementRef = doc(db, 'funding_agreements', seed.id);
       const snap = await getDoc(agreementRef);
       if (!snap.exists()) {
+        const isDemoGrantor = seed.id === 'fa-8041' && isEmailVerified && currentEmail === 'pafekzy@gmail.com';
+        const grantorEmail = isDemoGrantor && currentEmail ? currentEmail : seed.grantorEmail;
+        const grantorId = isDemoGrantor && currentUid ? currentUid : seed.grantorId;
+
         await setDoc(agreementRef, {
           id: seed.id,
           title: seed.title,
-          grantorId: seed.grantorId,
+          grantorId,
           grantorName: seed.grantorName,
-          grantorEmail: seed.grantorEmail,
+          grantorEmail,
           granteeId: seed.granteeId,
           granteeName: seed.granteeName,
           granteeEmail: seed.granteeEmail,

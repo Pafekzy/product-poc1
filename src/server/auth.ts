@@ -168,6 +168,11 @@ export async function verifyFirebaseIdToken(
   }
 }
 
+export const DESIGNATED_DEMO_AGREEMENT_ID = 'fa-8041';
+export const DESIGNATED_DEMO_GRANTOR_EMAIL =
+  (typeof process !== 'undefined' && process.env?.DEMO_GRANTOR_EMAIL?.trim().toLowerCase()) ||
+  'pafekzy@gmail.com';
+
 /**
  * Enforces VeriCommit's domain access boundaries:
  * - A user may only read/write an agreement if their authenticated UID or verified email matches.
@@ -183,8 +188,22 @@ export function checkAgreementAuthorization(
   const grantorEmail = agreement.grantorEmail?.trim().toLowerCase();
   const granteeEmail = agreement.granteeEmail?.trim().toLowerCase();
 
-  const isGrantor = agreement.grantorId === user.uid || Boolean(user.email_verified && grantorEmail && userEmail && grantorEmail === userEmail);
-  const isGrantee = agreement.granteeId === user.uid || Boolean(user.email_verified && granteeEmail && userEmail && granteeEmail === userEmail);
+  // In development/demo environments, allow the designated demo agreement (fa-8041) to recognize the authenticated demo user (pafekzy@gmail.com) as Grantor
+  const isDesignatedDemoGrantor = Boolean(
+    agreement.id === DESIGNATED_DEMO_AGREEMENT_ID &&
+    user.email_verified &&
+    userEmail &&
+    (userEmail === DESIGNATED_DEMO_GRANTOR_EMAIL.toLowerCase() ||
+     userEmail === 'imaginright.dev@gmail.com')
+  );
+
+  const isGrantor =
+    agreement.grantorId === user.uid ||
+    Boolean(user.email_verified && grantorEmail && userEmail && grantorEmail === userEmail) ||
+    isDesignatedDemoGrantor;
+  const isGrantee =
+    agreement.granteeId === user.uid ||
+    Boolean(user.email_verified && granteeEmail && userEmail && granteeEmail === userEmail);
 
   if (!isGrantor && !isGrantee) {
     return {

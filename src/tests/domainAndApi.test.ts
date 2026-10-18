@@ -914,3 +914,351 @@ describe('Multi-Agreement Listing & Scoped Authorization', () => {
     expect(localMilestoneId).toBe('ms-doc-02');
   });
 });
+
+describe('Task 3B: Designated Development/Demo Agreement Authorization & Unblocking', () => {
+  const demoAgreement = initialFundingAgreements.find(a => a.id === 'fa-8041')!;
+  const nonDemoAgreement = initialFundingAgreements.find(a => a.id === 'fa-7342')!;
+
+  describe('checkAgreementAuthorization with Designated Demo Grantor', () => {
+    it('recognizes verified demo user (pafekzy@gmail.com) as Grantor on fa-8041', () => {
+      const demoUser = {
+        uid: 'user-pafekzy-demo',
+        email: 'pafekzy@gmail.com',
+        email_verified: true
+      };
+
+      const result = checkAgreementAuthorization(demoUser, demoAgreement);
+      expect(result.authorized).toBe(true);
+      expect(result.role).toBe('Grantor');
+
+      const grantorRoleCheck = checkAgreementAuthorization(demoUser, demoAgreement, 'Grantor');
+      expect(grantorRoleCheck.authorized).toBe(true);
+      expect(grantorRoleCheck.role).toBe('Grantor');
+    });
+
+    it('rejects unverified demo user (email_verified: false) on fa-8041 to prevent impersonation', () => {
+      const unverifiedUser = {
+        uid: 'user-pafekzy-unverified',
+        email: 'pafekzy@gmail.com',
+        email_verified: false
+      };
+
+      const result = checkAgreementAuthorization(unverifiedUser, demoAgreement);
+      expect(result.authorized).toBe(false);
+      expect(result.error?.code).toBe('FORBIDDEN_CROSS_AGREEMENT_ACCESS');
+    });
+
+    it('strictly isolates non-demo agreements: denies demo user Grantor access to fa-7342', () => {
+      const demoUser = {
+        uid: 'user-pafekzy-demo',
+        email: 'pafekzy@gmail.com',
+        email_verified: true
+      };
+
+      const result = checkAgreementAuthorization(demoUser, nonDemoAgreement);
+      expect(result.authorized).toBe(false);
+      expect(result.error?.code).toBe('FORBIDDEN_CROSS_AGREEMENT_ACCESS');
+    });
+
+    it('strictly isolates unauthorized third parties from demo agreement fa-8041', () => {
+      const strangerUser = {
+        uid: 'user-stranger-999',
+        email: 'stranger@example.com',
+        email_verified: true
+      };
+
+      const result = checkAgreementAuthorization(strangerUser, demoAgreement);
+      expect(result.authorized).toBe(false);
+      expect(result.error?.code).toBe('FORBIDDEN_CROSS_AGREEMENT_ACCESS');
+    });
+
+    it('preserves test fixture grantor (imaginright.dev@gmail.com) as authorized Grantor on fa-8041', () => {
+      const testGrantor = {
+        uid: 'g-101',
+        email: 'imaginright.dev@gmail.com',
+        email_verified: true
+      };
+
+      const result = checkAgreementAuthorization(testGrantor, demoAgreement);
+      expect(result.authorized).toBe(true);
+      expect(result.role).toBe('Grantor');
+    });
+  });
+
+  describe('End-to-End API Workflows for Authenticated Demo User', () => {
+    it('GET /api/v1/agreements lists fa-8041 with userRole Grantor for pafekzy@gmail.com', async () => {
+      const token = await createSignedFirebaseToken({
+        uid: 'user-pafekzy-demo',
+        email: 'pafekzy@gmail.com',
+        email_verified: true
+      });
+
+      let statusCode = 0;
+      let responseBody = '';
+
+      const mockReq: any = {
+        method: 'GET',
+        headers: { authorization: `Bearer ${token}` }
+      };
+      const mockRes: any = {
+        setHeader: () => {},
+        set statusCode(val: number) { statusCode = val; },
+        end: (data: string) => { responseBody = data; }
+      };
+
+      const url = new URL('http://localhost:3000/api/v1/agreements');
+      const handled = await handleApiRequest(mockReq, mockRes, url, '', testKeySet);
+      expect(handled).toBe(true);
+      expect(statusCode).toBe(200);
+
+      const parsed = JSON.parse(responseBody);
+      expect(parsed.agreements).toBeDefined();
+      expect(parsed.agreements.some((a: any) => a.id === 'fa-8041' && a.userRole === 'Grantor')).toBe(true);
+    });
+
+    it('POST /api/v1/decisions allows pafekzy@gmail.com to record a human decision on fa-8041', async () => {
+      const token = await createSignedFirebaseToken({
+        uid: 'user-pafekzy-demo',
+        email: 'pafekzy@gmail.com',
+        email_verified: true
+      });
+
+      let statusCode = 0;
+      let responseBody = '';
+
+      const mockReq: any = {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}` }
+      };
+      const mockRes: any = {
+        setHeader: () => {},
+        set statusCode(val: number) { statusCode = val; },
+        end: (data: string) => { responseBody = data; }
+      };
+
+      const url = new URL('http://localhost:3000/api/v1/decisions');
+      const payload = JSON.stringify({
+        agreement_id: 'fa-8041',
+        milestone_id: 'ms-01',
+        status: 'approved',
+        reasoning: 'Verified all acceptance criteria against repository evidence and demo walkthrough.'
+      });
+
+      const handled = await handleApiRequest(mockReq, mockRes, url, payload, testKeySet);
+      expect(handled).toBe(true);
+      expect(statusCode).toBe(201);
+
+      const res = JSON.parse(responseBody);
+      expect(res.success).toBe(true);
+      expect(res.decision.agreement_id).toBe('fa-8041');
+      expect(res.decision.reviewer_role).toBe('Grantor');
+      expect(res.decision.reviewer_uid).toBe('user-pafekzy-demo');
+    });
+
+    it('POST /api/v1/decisions denies pafekzy@gmail.com from recording a decision on fa-7342 (cross-agreement fail closed)', async () => {
+      const token = await createSignedFirebaseToken({
+        uid: 'user-pafekzy-demo',
+        email: 'pafekzy@gmail.com',
+        email_verified: true
+      });
+
+      let statusCode = 0;
+      let responseBody = '';
+
+      const mockReq: any = {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}` }
+      };
+      const mockRes: any = {
+        setHeader: () => {},
+        set statusCode(val: number) { statusCode = val; },
+        end: (data: string) => { responseBody = data; }
+      };
+
+      const url = new URL('http://localhost:3000/api/v1/decisions');
+      const payload = JSON.stringify({
+        agreement_id: 'fa-7342',
+        milestone_id: 'ms-xchain-01',
+        status: 'approved',
+        reasoning: 'Unauthorized attempt to sign another agreement decision.'
+      });
+
+      await handleApiRequest(mockReq, mockRes, url, payload, testKeySet);
+      expect(statusCode).toBe(403);
+      expect(JSON.parse(responseBody).error.code).toBe('FORBIDDEN_CROSS_AGREEMENT_ACCESS');
+    });
+
+    it('POST /api/v1/evaluations executes milestone evaluation for pafekzy@gmail.com on fa-8041', async () => {
+      const token = await createSignedFirebaseToken({
+        uid: 'user-pafekzy-demo',
+        email: 'pafekzy@gmail.com',
+        email_verified: true
+      });
+
+      let statusCode = 0;
+      let responseBody = '';
+
+      const mockReq: any = {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}` }
+      };
+      const mockRes: any = {
+        setHeader: () => {},
+        set statusCode(val: number) { statusCode = val; },
+        end: (data: string) => { responseBody = data; }
+      };
+
+      const mockAi = createMockGeminiClient({
+        responseText: JSON.stringify({
+          overall_summary: 'Demonstration evidence supports milestone delivery.',
+          criteria_results: [
+            {
+              criterion: 'A user can submit the registration form and receive account confirmation.',
+              status: 'supported',
+              explanation: 'PR #12 implements registration form and confirmation view.',
+              evidence: [{ type: 'pull_request', title: 'PR #12: Registration', url: 'https://github.com/example/community-tools/pull/12' }]
+            }
+          ],
+          suggested_next_steps: ['Conduct human grantor review.'],
+          limitations: ['Evaluated within bounded test fixture limits.']
+        })
+      });
+
+      const url = new URL('http://localhost:3000/api/v1/evaluations');
+      const payload = JSON.stringify({
+        project_name: demoAgreement.title,
+        agreement_id: 'fa-8041',
+        milestone_id: 'ms-01',
+        repository_url: 'https://github.com/example/community-tools',
+        milestone: {
+          id: 'ms-01',
+          title: 'Implement member registration & validation',
+          description: 'Deliver user registration workflows.',
+          acceptance_criteria: ['A user can submit the registration form and receive account confirmation.']
+        },
+        evidence_source: 'sample'
+      });
+
+      const handled = await handleApiRequest(mockReq, mockRes, url, payload, testKeySet, undefined, mockAi);
+      expect(handled).toBe(true);
+      expect(statusCode).toBe(200);
+
+      const res = JSON.parse(responseBody);
+      expect(res.agreement_id).toBe('fa-8041');
+      expect(res.human_review_required).toBe(true);
+      expect(res.criteria_results[0].status).toBe('supported');
+    });
+
+    it('POST /api/v1/evaluations denies pafekzy@gmail.com from evaluating milestone on fa-7342', async () => {
+      const token = await createSignedFirebaseToken({
+        uid: 'user-pafekzy-demo',
+        email: 'pafekzy@gmail.com',
+        email_verified: true
+      });
+
+      let statusCode = 0;
+      let responseBody = '';
+
+      const mockReq: any = {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}` }
+      };
+      const mockRes: any = {
+        setHeader: () => {},
+        set statusCode(val: number) { statusCode = val; },
+        end: (data: string) => { responseBody = data; }
+      };
+
+      const url = new URL('http://localhost:3000/api/v1/evaluations');
+      const payload = JSON.stringify({
+        project_name: nonDemoAgreement.title,
+        agreement_id: 'fa-7342',
+        milestone_id: 'ms-xchain-01',
+        repository_url: 'https://github.com/example/audit-protocol',
+        milestone: {
+          id: 'ms-xchain-01',
+          title: 'Audit Trail Protocol Specification',
+          description: 'Design append-only audit logs.',
+          acceptance_criteria: ['Formal protocol specification published in repository.']
+        },
+        evidence_source: 'sample'
+      });
+
+      await handleApiRequest(mockReq, mockRes, url, payload, testKeySet);
+      expect(statusCode).toBe(403);
+      expect(JSON.parse(responseBody).error.code).toBe('FORBIDDEN_CROSS_AGREEMENT_ACCESS');
+    });
+
+    it('GET /api/v1/evidence/github allows pafekzy@gmail.com on fa-8041 but denies on fa-7342', async () => {
+      const token = await createSignedFirebaseToken({
+        uid: 'user-pafekzy-demo',
+        email: 'pafekzy@gmail.com',
+        email_verified: true
+      });
+
+      // Denied on fa-7342
+      let deniedStatusCode = 0;
+      let deniedBody = '';
+      const deniedReq: any = {
+        method: 'GET',
+        headers: { authorization: `Bearer ${token}` }
+      };
+      const deniedRes: any = {
+        setHeader: () => {},
+        set statusCode(val: number) { deniedStatusCode = val; },
+        end: (data: string) => { deniedBody = data; }
+      };
+
+      const deniedUrl = new URL('http://localhost:3000/api/v1/evidence/github?repo_url=https://github.com/Pafekzy/product-poc1&agreement_id=fa-7342');
+      await handleApiRequest(deniedReq, deniedRes, deniedUrl, '', testKeySet);
+      expect(deniedStatusCode).toBe(403);
+      expect(JSON.parse(deniedBody).error.code).toBe('FORBIDDEN_CROSS_AGREEMENT_ACCESS');
+
+      // Allowed on fa-8041
+      let allowedStatusCode = 0;
+      let allowedBody = '';
+      const allowedReq: any = {
+        method: 'GET',
+        headers: { authorization: `Bearer ${token}` }
+      };
+      const allowedRes: any = {
+        setHeader: () => {},
+        set statusCode(val: number) { allowedStatusCode = val; },
+        end: (data: string) => { allowedBody = data; }
+      };
+
+      const mockFetchForGithub = (async (url: string) => {
+        if (url.includes('/commits')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => [
+              {
+                sha: 'abc1234567890',
+                commit: {
+                  message: 'Add live evidence retrieval',
+                  author: { name: 'Pafekzy', date: new Date().toISOString() }
+                },
+                html_url: 'https://github.com/Pafekzy/product-poc1/commit/abc1234567890'
+              }
+            ]
+          };
+        }
+        if (url.includes('/pulls')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => []
+          };
+        }
+        return { ok: false, status: 404 };
+      }) as any;
+
+      const allowedUrl = new URL('http://localhost:3000/api/v1/evidence/github?repo_url=https://github.com/Pafekzy/product-poc1&agreement_id=fa-8041');
+      await handleApiRequest(allowedReq, allowedRes, allowedUrl, '', testKeySet, mockFetchForGithub);
+      expect(allowedStatusCode).toBe(200);
+      const allowedData = JSON.parse(allowedBody);
+      expect(allowedData.totalCommits).toBe(1);
+    });
+  });
+});
