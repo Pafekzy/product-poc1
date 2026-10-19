@@ -760,9 +760,9 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#F5F7F9] text-[#17212B] flex flex-col font-sans overflow-x-hidden max-w-full">
-      {/* Top Navigation Bar - Locked Navy Header */}
-      <header className="bg-[#142C3E] text-white border-b border-[#22435D] sticky top-0 z-40 shadow-sm w-full">
+    <div className="min-h-screen bg-[#F5F7F9] text-[#17212B] flex flex-col font-sans max-w-full">
+      {/* Top Navigation Bar - Locked Navy Header (Fixed Viewport Navigation) */}
+      <header className="fixed top-0 left-0 right-0 z-40 bg-[#142C3E] text-white border-b border-[#22435D] shadow-md w-full">
         <div className="max-w-7xl mx-auto px-2.5 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-1.5 sm:gap-2">
           {/* Brand & Logo */}
           <div className="flex items-center gap-2 sm:gap-4 min-w-0">
@@ -850,8 +850,11 @@ export default function App() {
         </nav>
       </header>
 
+      {/* Persistent Header Spacer to reserve vertical space for fixed header and prevent content occlusion */}
+      <div className="h-[113px] shrink-0 w-full" aria-hidden="true" />
+
       {/* Main Content Canvas */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6 overflow-x-hidden relative z-10">
         {/* Agreement Selector & Scoped Role Bar */}
         <div className="mb-4 sm:mb-6 bg-white rounded-xl border border-[#DCE3E9] p-3.5 sm:p-4 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-3">
           <div className="flex flex-col sm:flex-row sm:items-center gap-3 min-w-0 flex-1">

@@ -105,4 +105,54 @@ describe('VeriCommit Branded Dropdown & Dashboard Layout Audit', () => {
       expect(appSource).toContain("setActiveTab('human-review')");
     });
   });
+
+  describe('4. Persistent Viewport Navigation & Stacking Invariants', () => {
+    it('pins the header directly to viewport with fixed top-0 left-0 right-0 z-40 and opaque styling', () => {
+      expect(appSource).toContain('fixed top-0 left-0 right-0 z-40');
+      expect(appSource).toContain('bg-[#142C3E]');
+      expect(appSource).toContain('shadow-md');
+      expect(appSource).toContain('w-full');
+    });
+
+    it('vertically stacks branding bar and navigation tabs within the single fixed header', () => {
+      const headerStart = appSource.indexOf('<header');
+      const headerEnd = appSource.indexOf('</header>', headerStart);
+      const headerContent = appSource.substring(headerStart, headerEnd);
+
+      // 1. Branding bar (logo, title, version, persistence indicator, sign-in)
+      expect(headerContent).toContain('VeriCommit');
+      expect(headerContent).toContain('/images/vericommit-v-check-logo.png');
+      expect(headerContent).toContain('h-16');
+
+      // 2. Navigation bar with all 6 tabs
+      expect(headerContent).toContain('<nav ref={navScrollRef}');
+      expect(headerContent).toContain("id: 'dashboard', label: 'Workspace Dashboard'");
+      expect(headerContent).toContain("id: 'milestone-details', label: 'Milestone Details'");
+      expect(headerContent).toContain("id: 'evidence-explorer', label: 'Evidence Explorer'");
+      expect(headerContent).toContain("id: 'verification-report', label: 'Verification Report'");
+      expect(headerContent).toContain("id: 'human-review', label: 'Human Review'");
+      expect(headerContent).toContain("id: 'audit-history', label: 'Audit History'");
+    });
+
+    it('reserves vertical space with a structural spacer to prevent content occlusion', () => {
+      // Confirms spacer exists immediately between </header> and <main>
+      const headerEnd = appSource.indexOf('</header>');
+      const mainStart = appSource.indexOf('<main', headerEnd);
+      const intermediateSnippet = appSource.substring(headerEnd, mainStart);
+
+      expect(intermediateSnippet).toContain('h-[113px]');
+      expect(intermediateSnippet).toContain('aria-hidden="true"');
+    });
+
+    it('establishes proper stacking contexts: z-10 for main content, z-40 for fixed header, z-50 for modal dialog', () => {
+      // Main canvas is restricted to z-10 so inner dropdowns never bleed over the fixed header
+      expect(appSource).toContain('overflow-x-hidden relative z-10');
+
+      // Fixed header is z-40
+      expect(appSource).toContain('fixed top-0 left-0 right-0 z-40');
+
+      // Modal dialog is z-50 to overlay the fixed header when open
+      expect(appSource).toContain('fixed inset-0 z-50');
+    });
+  });
 });
