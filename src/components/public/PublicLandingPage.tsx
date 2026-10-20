@@ -90,7 +90,7 @@ export function PublicLandingPage({
           </div>
 
           <h1 className="text-3xl sm:text-5xl font-extrabold text-[#142C3E] tracking-tight leading-tight sm:leading-tight">
-            Verify What Software Grantees Commit to Deliver.
+            <span className="text-[#167D72]">Veri</span>fy What Software Grantees, <span className="text-[#167D72]">Commit</span> to Deliver.
           </h1>
 
           <p className="text-base sm:text-lg text-[#5B6673] max-w-2xl mx-auto leading-relaxed">

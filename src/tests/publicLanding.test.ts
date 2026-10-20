@@ -18,7 +18,9 @@ describe('VeriCommit Public Landing Page & Entry Point (Phase 2B-1)', () => {
     });
 
     it('contains the approved headline and supporting copy (Phase 2B-3A)', () => {
-      expect(landingSource).toContain('Verify What Software Grantees Commit to Deliver.');
+      expect(landingSource).toContain('fy What Software Grantees,');
+      expect(landingSource).toContain('to Deliver.');
+      expect(landingSource).toMatch(/<span[^>]*>Veri<\/span>fy What Software Grantees,\s*<span[^>]*>Commit<\/span> to Deliver\./);
       expect(landingSource).toContain(
         'VeriCommit helps grantors assess software grantees’ progress against agreed commitments using observable GitHub evidence, grounded AI assistance, and an auditable review process that supports accountable human decisions.'
       );
