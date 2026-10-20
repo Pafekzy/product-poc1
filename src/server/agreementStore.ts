@@ -285,9 +285,8 @@ export async function getAuthoritativeAgreementsForUser(
         }
       }
 
-      if (results.length > 0) {
-        return results;
-      }
+      // Return results directly (including empty array) when authoritative query succeeds
+      return results;
     } catch {
       // Failed to execute live query
     }

@@ -25,6 +25,8 @@ import {
 } from 'lucide-react';
 import { FeatureCarousel } from './components/FeatureCarousel';
 import { BrandedDropdown } from './components/BrandedDropdown';
+import { PublicLandingPage } from './components/public/PublicLandingPage';
+import { EmptyWorkspaceView } from './components/common/EmptyWorkspaceView';
 import type { User } from 'firebase/auth';
 import {
   FundingAgreement,
@@ -88,7 +90,7 @@ export default function App() {
 
   // Dynamically compute caller's role on the selected agreement from cryptographic auth identity
   const userRole: 'Grantor' | 'Grantee' | 'Observer' = (() => {
-    if (!currentUser) return 'Observer';
+    if (!currentUser || !currentAgreement) return 'Observer';
     const emailVerified = currentUser.emailVerified;
     const userEmail = currentUser.email?.trim().toLowerCase();
     const grantorEmail = currentAgreement.grantorEmail?.trim().toLowerCase();
@@ -257,8 +259,8 @@ export default function App() {
 
   // Dynamically subscribe to the active funding agreement, evaluations, and audit logs
   useEffect(() => {
-    // Only subscribe to Firestore when DB is connected and caller is authenticated
-    if (!dbConnected || !currentUser) return;
+    // Only subscribe to Firestore when DB is connected, caller is authenticated, and agreement is selected
+    if (!dbConnected || !currentUser || !selectedAgreementId) return;
 
     const unsubAgreement = subscribeFundingAgreement(
       selectedAgreementId,
@@ -311,31 +313,54 @@ export default function App() {
   }, [selectedAgreementId, dbConnected, currentUser]);
 
   // Load authorized agreements when authenticated user changes
-  useEffect(() => {
+  const loadAuthorizedAgreements = async (forceTokenRefresh = false) => {
     if (!currentUser) {
       setAvailableAgreements(initialFundingAgreements);
+      setCurrentAgreement(initialFundingAgreements[0]);
+      setSelectedAgreementId('fa-8041');
+      activeAgreementIdRef.current = 'fa-8041';
+      setSelectedMilestoneId('ms-01');
+      setEvaluations(sampleEvaluationReports);
+      setAuditLogs(initialAuditLogs);
       return;
     }
 
     setAgreementsLoading(true);
-    currentUser.getIdToken().then(async idToken => {
-      try {
-        const authorized = await fetchAuthorizedAgreements(idToken);
-        if (authorized && authorized.length > 0) {
-          setAvailableAgreements(authorized);
-          if (!authorized.some(a => a.id === activeAgreementIdRef.current)) {
-            handleSelectAgreement(authorized[0].id, authorized);
-          }
+    try {
+      const idToken = await currentUser.getIdToken(forceTokenRefresh);
+      const authorized = await fetchAuthorizedAgreements(idToken);
+      if (Array.isArray(authorized)) {
+        setAvailableAgreements(authorized);
+        if (authorized.length > 0) {
+          const targetId = authorized.some(a => a.id === activeAgreementIdRef.current)
+            ? activeAgreementIdRef.current
+            : authorized[0].id;
+          handleSelectAgreement(targetId, authorized);
+        } else {
+          // Zero authorized agreements: enforce honest empty state and isolate sample mock data
+          setSelectedAgreementId('');
+          activeAgreementIdRef.current = '';
+          setSelectedMilestoneId('');
+          setEvaluations({});
+          setAuditLogs([]);
         }
-      } catch (err: any) {
-        console.warn('Could not fetch authorized agreements:', err);
-      } finally {
-        setAgreementsLoading(false);
       }
-    }).catch(err => {
-      console.warn('Token error:', err);
+    } catch (err: any) {
+      console.warn('Could not fetch authorized agreements:', err);
+      // Strictly isolate mock data on error: do not expose sample agreements
+      setAvailableAgreements([]);
+      setSelectedAgreementId('');
+      activeAgreementIdRef.current = '';
+      setSelectedMilestoneId('');
+      setEvaluations({});
+      setAuditLogs([]);
+    } finally {
       setAgreementsLoading(false);
-    });
+    }
+  };
+
+  useEffect(() => {
+    loadAuthorizedAgreements();
   }, [currentUser]);
 
   // Ensure active navigation tab is scrolled into view smoothly on mobile screens
@@ -348,7 +373,7 @@ export default function App() {
     }
   }, [activeTab]);
 
-  const currentMilestone = currentAgreement.milestones.find(m => m.id === selectedMilestoneId) || currentAgreement.milestones[0];
+  const currentMilestone = currentAgreement?.milestones?.find(m => m.id === selectedMilestoneId) || currentAgreement?.milestones?.[0];
   const currentEvaluation = currentMilestone?.evaluationId ? evaluations[currentMilestone.evaluationId] : null;
 
   // Fallback direct retrieval of milestone evaluation report from Cloud Firestore if not yet in state
@@ -758,6 +783,54 @@ export default function App() {
         );
     }
   };
+
+  // Render loading state while initializing Firebase Auth
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-[#F5F7F9] flex items-center justify-center font-sans">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 className="w-8 h-8 text-[#167D72] animate-spin" />
+          <span className="text-xs text-[#5B6673] font-medium">Loading VeriCommit...</span>
+        </div>
+      </div>
+    );
+  }
+
+  // Render Public Landing Page for unauthenticated visitors (Phase 2B-1)
+  if (!currentUser) {
+    return (
+      <PublicLandingPage
+        onSignIn={handleAuthAction}
+        onTryVeriCommit={handleAuthAction}
+        isLoading={authLoading}
+      />
+    );
+  }
+
+  // Render loading state while checking authorized agreements for authenticated user
+  if (agreementsLoading && availableAgreements.length === 0) {
+    return (
+      <div className="min-h-screen bg-[#F5F7F9] flex items-center justify-center font-sans">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 className="w-8 h-8 text-[#167D72] animate-spin" />
+          <span className="text-xs text-[#5B6673] font-medium">Verifying authorized funding agreements...</span>
+        </div>
+      </div>
+    );
+  }
+
+  // Render Honest Empty State for authenticated users with zero authorized agreements (Phase 2B-2)
+  if (availableAgreements.length === 0) {
+    return (
+      <EmptyWorkspaceView
+        user={currentUser}
+        onRefresh={() => loadAuthorizedAgreements(true)}
+        onSignOut={handleAuthAction}
+        isLoading={agreementsLoading}
+        dbConnected={dbConnected}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#F5F7F9] text-[#17212B] flex flex-col font-sans max-w-full">
