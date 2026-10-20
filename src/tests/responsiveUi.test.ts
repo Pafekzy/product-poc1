@@ -6,6 +6,9 @@ describe('VeriCommit Responsive UI Audit & Verification (Prompt 05)', () => {
   const appPath = path.resolve(__dirname, '../App.tsx');
   const appSource = fs.readFileSync(appPath, 'utf-8');
 
+  const headerPath = path.resolve(__dirname, '../components/workspace/WorkspaceHeader.tsx');
+  const headerSource = fs.readFileSync(headerPath, 'utf-8');
+
   const cssPath = path.resolve(__dirname, '../index.css');
   const cssSource = fs.readFileSync(cssPath, 'utf-8');
 
@@ -62,15 +65,15 @@ describe('VeriCommit Responsive UI Audit & Verification (Prompt 05)', () => {
 
   describe('3. Mobile Header & Auth Adaptability (320px - 390px)', () => {
     it('uses responsive padding on header for tight viewports', () => {
-      expect(appSource).toContain('px-2.5 sm:px-6 lg:px-8');
+      expect(headerSource).toContain('px-2.5 sm:px-6 lg:px-8');
     });
 
     it('provides responsive max-width truncation for user display names to prevent header overflow', () => {
-      expect(appSource).toContain('max-w-[65px] xs:max-w-[90px] sm:max-w-[140px]');
+      expect(headerSource).toContain('max-w-[65px] xs:max-w-[90px] sm:max-w-[140px]');
     });
 
     it('ensures Google sign-in and sign-out buttons have touch-friendly minimum heights', () => {
-      expect(appSource).toContain('min-h-[36px]');
+      expect(headerSource).toContain('min-h-[36px]');
     });
   });
 
@@ -140,7 +143,7 @@ describe('VeriCommit Responsive UI Audit & Verification (Prompt 05)', () => {
     });
 
     it('retains the official logo asset path without AI substitutions', () => {
-      expect(appSource).toContain('/images/vericommit-v-check-logo.png');
+      expect(headerSource).toContain('/images/vericommit-v-check-logo.png');
     });
   });
 });

@@ -6,6 +6,12 @@ describe('VeriCommit Branded Dropdown & Dashboard Layout Audit', () => {
   const dropdownPath = path.resolve(__dirname, '../components/BrandedDropdown.tsx');
   const dropdownSource = fs.readFileSync(dropdownPath, 'utf-8');
 
+  const agreementBarPath = path.resolve(__dirname, '../components/workspace/AgreementContextBar.tsx');
+  const agreementBarSource = fs.readFileSync(agreementBarPath, 'utf-8');
+
+  const headerPath = path.resolve(__dirname, '../components/workspace/WorkspaceHeader.tsx');
+  const headerSource = fs.readFileSync(headerPath, 'utf-8');
+
   const appPath = path.resolve(__dirname, '../App.tsx');
   const appSource = fs.readFileSync(appPath, 'utf-8');
 
@@ -61,21 +67,23 @@ describe('VeriCommit Branded Dropdown & Dashboard Layout Audit', () => {
   });
 
   describe('3. App.tsx Integration & Dashboard Section Order Invariants', () => {
-    it('imports and mounts BrandedDropdown for Funding Agreement selector', () => {
-      expect(appSource).toContain("import { BrandedDropdown } from './components/BrandedDropdown';");
-      expect(appSource).toContain('<BrandedDropdown');
-      expect(appSource).toContain('dataTestId="agreement-selector"');
+    it('imports and mounts BrandedDropdown inside AgreementContextBar for Funding Agreement selector', () => {
+      expect(agreementBarSource).toContain("import { BrandedDropdown } from '../BrandedDropdown';");
+      expect(agreementBarSource).toContain('<BrandedDropdown');
+      expect(agreementBarSource).toContain('dataTestId="agreement-selector"');
+      expect(appSource).toContain("import { AgreementContextBar } from './components/workspace/AgreementContextBar';");
+      expect(appSource).toContain('<AgreementContextBar');
     });
 
     it('preserves existing agreement selection values, state handler, and options', () => {
-      expect(appSource).toContain('value={selectedAgreementId}');
-      expect(appSource).toContain('onChange={handleSelectAgreement}');
-      expect(appSource).toContain('availableAgreements.map');
+      expect(appSource).toContain('selectedAgreementId={selectedAgreementId}');
+      expect(appSource).toContain('onSelectAgreement={handleSelectAgreement}');
+      expect(agreementBarSource).toContain('agreements.map');
     });
 
     it('enforces strict Dashboard section order: Selector -> Showcase -> Human Decision Banner -> Agreement Details', () => {
       // 1. Funding Agreement selector appears in layout before Dashboard tab
-      const selectorIndex = appSource.indexOf('id="agreement-selector"');
+      const selectorIndex = appSource.indexOf('<AgreementContextBar');
       expect(selectorIndex).toBeGreaterThan(-1);
 
       // Dashboard tab container start
@@ -108,35 +116,32 @@ describe('VeriCommit Branded Dropdown & Dashboard Layout Audit', () => {
 
   describe('4. Persistent Viewport Navigation & Stacking Invariants', () => {
     it('pins the header directly to viewport with fixed top-0 left-0 right-0 z-40 and opaque styling', () => {
-      expect(appSource).toContain('fixed top-0 left-0 right-0 z-40');
-      expect(appSource).toContain('bg-[#142C3E]');
-      expect(appSource).toContain('shadow-md');
-      expect(appSource).toContain('w-full');
+      expect(headerSource).toContain('fixed top-0 left-0 right-0 z-40');
+      expect(headerSource).toContain('bg-[#142C3E]');
+      expect(headerSource).toContain('shadow-md');
+      expect(headerSource).toContain('w-full');
     });
 
     it('vertically stacks branding bar and navigation tabs within the single fixed header', () => {
-      const headerStart = appSource.indexOf('<header');
-      const headerEnd = appSource.indexOf('</header>', headerStart);
-      const headerContent = appSource.substring(headerStart, headerEnd);
+      // 1. WorkspaceHeader renders branding bar (logo, title, version, persistence indicator, sign-in)
+      expect(headerSource).toContain('VeriCommit');
+      expect(headerSource).toContain('/images/vericommit-v-check-logo.png');
+      expect(headerSource).toContain('h-16');
 
-      // 1. Branding bar (logo, title, version, persistence indicator, sign-in)
-      expect(headerContent).toContain('VeriCommit');
-      expect(headerContent).toContain('/images/vericommit-v-check-logo.png');
-      expect(headerContent).toContain('h-16');
-
-      // 2. Navigation bar with all 6 tabs
-      expect(headerContent).toContain('<nav ref={navScrollRef}');
-      expect(headerContent).toContain("id: 'dashboard', label: 'Workspace Dashboard'");
-      expect(headerContent).toContain("id: 'milestone-details', label: 'Milestone Details'");
-      expect(headerContent).toContain("id: 'evidence-explorer', label: 'Evidence Explorer'");
-      expect(headerContent).toContain("id: 'verification-report', label: 'Verification Report'");
-      expect(headerContent).toContain("id: 'human-review', label: 'Human Review'");
-      expect(headerContent).toContain("id: 'audit-history', label: 'Audit History'");
+      // 2. Navigation bar with all 6 tabs mounted inside WorkspaceHeader in App.tsx
+      expect(appSource).toContain('<WorkspaceHeader');
+      expect(appSource).toContain('<nav ref={navScrollRef}');
+      expect(appSource).toContain("id: 'dashboard', label: 'Workspace Dashboard'");
+      expect(appSource).toContain("id: 'milestone-details', label: 'Milestone Details'");
+      expect(appSource).toContain("id: 'evidence-explorer', label: 'Evidence Explorer'");
+      expect(appSource).toContain("id: 'verification-report', label: 'Verification Report'");
+      expect(appSource).toContain("id: 'human-review', label: 'Human Review'");
+      expect(appSource).toContain("id: 'audit-history', label: 'Audit History'");
     });
 
     it('reserves vertical space with a structural spacer to prevent content occlusion', () => {
-      // Confirms spacer exists immediately between </header> and <main>
-      const headerEnd = appSource.indexOf('</header>');
+      // Confirms spacer exists immediately between </WorkspaceHeader> and <main>
+      const headerEnd = appSource.indexOf('</WorkspaceHeader>');
       const mainStart = appSource.indexOf('<main', headerEnd);
       const intermediateSnippet = appSource.substring(headerEnd, mainStart);
 
@@ -149,7 +154,7 @@ describe('VeriCommit Branded Dropdown & Dashboard Layout Audit', () => {
       expect(appSource).toContain('overflow-x-hidden relative z-10');
 
       // Fixed header is z-40
-      expect(appSource).toContain('fixed top-0 left-0 right-0 z-40');
+      expect(headerSource).toContain('fixed top-0 left-0 right-0 z-40');
 
       // Modal dialog is z-50 to overlay the fixed header when open
       expect(appSource).toContain('fixed inset-0 z-50');

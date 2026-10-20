@@ -17,14 +17,12 @@ import {
   UserCheck,
   Sparkles,
   Info,
-  LogIn,
-  LogOut,
-  Database,
   RefreshCw,
   Loader2
 } from 'lucide-react';
 import { FeatureCarousel } from './components/FeatureCarousel';
-import { BrandedDropdown } from './components/BrandedDropdown';
+import { WorkspaceHeader } from './components/workspace/WorkspaceHeader';
+import { AgreementContextBar } from './components/workspace/AgreementContextBar';
 import { PublicLandingPage } from './components/public/PublicLandingPage';
 import { EmptyWorkspaceView } from './components/common/EmptyWorkspaceView';
 import { AgreementErrorView } from './components/common/AgreementErrorView';
@@ -854,61 +852,12 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#F5F7F9] text-[#17212B] flex flex-col font-sans max-w-full">
       {/* Top Navigation Bar - Locked Navy Header (Fixed Viewport Navigation) */}
-      <header className="fixed top-0 left-0 right-0 z-40 bg-[#142C3E] text-white border-b border-[#22435D] shadow-md w-full">
-        <div className="max-w-7xl mx-auto px-2.5 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-1.5 sm:gap-2">
-          {/* Brand & Logo */}
-          <div className="flex items-center gap-2 sm:gap-4 min-w-0">
-            <img
-              src="/images/vericommit-v-check-logo.png"
-              alt="VeriCommit Logo"
-              className="h-8 sm:h-9 w-auto object-contain bg-white rounded p-1 shrink-0"
-            />
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5 sm:gap-2">
-                <span className="font-bold text-sm xs:text-base sm:text-lg tracking-tight text-white shrink-0">VeriCommit</span>
-                <span className="text-[10px] sm:text-xs bg-[#167D72] text-white px-1.5 sm:px-2 py-0.5 rounded font-mono font-medium shrink-0">v1.0</span>
-              </div>
-              <p className="hidden md:block text-xs text-[#DCE3E9] truncate">Evidence-led milestone verification.</p>
-            </div>
-          </div>
-
-          {/* Quick Context & Authentication Strip */}
-          <div className="flex items-center gap-1.5 sm:gap-3 text-xs shrink-0">
-            {/* Persistence Indicator */}
-            <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 rounded bg-[#0E1E2B] border border-[#22435D] text-[#DCE3E9]">
-              <Database className={`w-3.5 h-3.5 ${dbConnected ? 'text-[#167D72]' : 'text-[#8C5E00]'}`} />
-              <span>Firestore: {dbConnected ? 'Connected' : 'Connecting...'}</span>
-            </div>
-
-            {/* User Auth Info / Login */}
-            {currentUser ? (
-              <div className="flex items-center gap-1 sm:gap-2 bg-[#0E1E2B] px-2 sm:px-3 py-1.5 rounded-lg border border-[#22435D] min-w-0">
-                <span className="text-white font-medium truncate max-w-[65px] xs:max-w-[90px] sm:max-w-[140px] text-xs">
-                  {currentUser.displayName || currentUser.email}
-                </span>
-                <button
-                  onClick={handleAuthAction}
-                  className="text-xs text-[#DCE3E9] hover:text-white flex items-center gap-1 bg-[#142C3E] px-2 py-1.5 rounded min-h-[36px] sm:min-h-auto transition shrink-0"
-                  title="Sign out"
-                >
-                  <LogOut className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Sign out</span>
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={handleAuthAction}
-                disabled={authLoading}
-                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 bg-[#167D72] text-white font-medium rounded-lg hover:bg-[#12645B] transition shadow-xs text-xs min-h-[36px] shrink-0"
-              >
-                <LogIn className="w-3.5 h-3.5 shrink-0" />
-                <span className="hidden sm:inline">Sign in with Google</span>
-                <span className="sm:hidden">Sign in</span>
-              </button>
-            )}
-          </div>
-        </div>
-
+      <WorkspaceHeader
+        user={currentUser}
+        onSignOut={handleAuthAction}
+        dbConnected={dbConnected}
+        authLoading={authLoading}
+      >
         {/* Navigation Tabs - 6 Principal Screens with Smooth Horizontal Scroll */}
         <nav ref={navScrollRef} className="bg-[#0D2130] px-2 sm:px-6 lg:px-8 border-t border-[#1C3A50] overflow-x-auto no-scrollbar touch-pan-x scroll-smooth">
           <div className="max-w-7xl mx-auto flex space-x-1 min-w-max py-0.5">
@@ -940,7 +889,7 @@ export default function App() {
             })}
           </div>
         </nav>
-      </header>
+      </WorkspaceHeader>
 
       {/* Persistent Header Spacer to reserve vertical space for fixed header and prevent content occlusion */}
       <div className="h-[113px] shrink-0 w-full" aria-hidden="true" />
@@ -948,53 +897,14 @@ export default function App() {
       {/* Main Content Canvas */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6 overflow-x-hidden relative z-10">
         {/* Agreement Selector & Scoped Role Bar */}
-        <div className="mb-4 sm:mb-6 bg-white rounded-xl border border-[#DCE3E9] p-3.5 sm:p-4 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-3">
-          <div className="flex flex-col sm:flex-row sm:items-center gap-3 min-w-0 flex-1">
-            <div className="flex items-center gap-2 shrink-0">
-              <FolderGit2 className="w-5 h-5 text-[#167D72] shrink-0" />
-              <span className="text-xs font-bold uppercase tracking-wider text-[#5B6673]">Funding Agreement:</span>
-            </div>
-            <div className="flex-1 min-w-0 max-w-xl">
-              <BrandedDropdown
-                id="agreement-selector"
-                value={selectedAgreementId}
-                onChange={handleSelectAgreement}
-                disabled={agreementsLoading}
-                ariaLabel="Select Funding Agreement"
-                dataTestId="agreement-selector"
-                options={availableAgreements.map(ag => ({
-                  value: ag.id,
-                  label: `[${ag.id.toUpperCase()}] ${ag.title}`,
-                  badge: ag.id.toUpperCase(),
-                  secondaryText: `${ag.grantorName} • ${ag.granteeName} • ${ag.totalCommitment}`
-                }))}
-              />
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 shrink-0 self-start md:self-auto flex-wrap">
-            {/* Mode Indicator */}
-            <span className={`text-[11px] font-mono font-medium px-2.5 py-1 rounded-md border ${
-              currentUser
-                ? 'bg-[#E6F4F2] text-[#167D72] border-[#A8DDD7]'
-                : 'bg-[#EEF2F6] text-[#5B6673] border-[#DCE3E9]'
-            }`}>
-              {currentUser ? 'Authenticated Scope' : 'Demo Mode (Sample)'}
-            </span>
-
-            {/* Computed Role Badge */}
-            <span className={`text-[11px] font-mono font-bold px-2.5 py-1 rounded-md border flex items-center gap-1.5 ${
-              userRole === 'Grantor'
-                ? 'bg-[#E6F4F2] text-[#167D72] border-[#A8DDD7]'
-                : userRole === 'Grantee'
-                ? 'bg-[#EAF2F8] text-[#1E5F8B] border-[#BBD5E8]'
-                : 'bg-[#FFF8E6] text-[#8C5E00] border-[#F2D696]'
-            }`}>
-              <UserCheck className="w-3.5 h-3.5 shrink-0" />
-              Role: {userRole === 'Grantor' ? 'Grantor (Authorized Signer)' : userRole === 'Grantee' ? 'Grantee (Recipient)' : 'Observer'}
-            </span>
-          </div>
-        </div>
+        <AgreementContextBar
+          agreements={availableAgreements}
+          selectedAgreementId={selectedAgreementId}
+          onSelectAgreement={handleSelectAgreement}
+          userRole={userRole}
+          isAuthenticated={Boolean(currentUser)}
+          isLoading={agreementsLoading}
+        />
 
         {/* Banner Alert on non-dashboard tabs if Human Review is Pending */}
         {activeTab !== 'dashboard' && activeTab !== 'human-review' && currentMilestone && !currentMilestone.humanDecision && currentMilestone.evaluationId && (
