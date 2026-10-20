@@ -27,6 +27,7 @@ import { FeatureCarousel } from './components/FeatureCarousel';
 import { BrandedDropdown } from './components/BrandedDropdown';
 import { PublicLandingPage } from './components/public/PublicLandingPage';
 import { EmptyWorkspaceView } from './components/common/EmptyWorkspaceView';
+import { AgreementErrorView } from './components/common/AgreementErrorView';
 import type { User } from 'firebase/auth';
 import {
   FundingAgreement,
@@ -76,6 +77,7 @@ export default function App() {
   const [evaluations, setEvaluations] = useState<Record<string, EvaluationReport>>(sampleEvaluationReports);
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>(initialAuditLogs);
   const [agreementsLoading, setAgreementsLoading] = useState<boolean>(false);
+  const [agreementsError, setAgreementsError] = useState<string | null>(null);
 
   // Authentication & Connection state
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -322,6 +324,7 @@ export default function App() {
       setSelectedMilestoneId('ms-01');
       setEvaluations(sampleEvaluationReports);
       setAuditLogs(initialAuditLogs);
+      setAgreementsError(null);
       return;
     }
 
@@ -330,6 +333,7 @@ export default function App() {
       const idToken = await currentUser.getIdToken(forceTokenRefresh);
       const authorized = await fetchAuthorizedAgreements(idToken);
       if (Array.isArray(authorized)) {
+        setAgreementsError(null);
         setAvailableAgreements(authorized);
         if (authorized.length > 0) {
           const targetId = authorized.some(a => a.id === activeAgreementIdRef.current)
@@ -347,13 +351,14 @@ export default function App() {
       }
     } catch (err: any) {
       console.warn('Could not fetch authorized agreements:', err);
-      // Strictly isolate mock data on error: do not expose sample agreements
+      // Strictly isolate mock data on error and preserve distinct error state
       setAvailableAgreements([]);
       setSelectedAgreementId('');
       activeAgreementIdRef.current = '';
       setSelectedMilestoneId('');
       setEvaluations({});
       setAuditLogs([]);
+      setAgreementsError(err?.message || 'Failed to retrieve authorized agreements from server.');
     } finally {
       setAgreementsLoading(false);
     }
@@ -803,6 +808,20 @@ export default function App() {
         onSignIn={handleAuthAction}
         onTryVeriCommit={handleAuthAction}
         isLoading={authLoading}
+      />
+    );
+  }
+
+  // Render Distinct Error State for failed agreement requests (Phase 2B-3A)
+  if (agreementsError && availableAgreements.length === 0) {
+    return (
+      <AgreementErrorView
+        user={currentUser}
+        error={agreementsError}
+        onRetry={() => loadAuthorizedAgreements(true)}
+        onSignOut={handleAuthAction}
+        isLoading={agreementsLoading}
+        dbConnected={dbConnected}
       />
     );
   }

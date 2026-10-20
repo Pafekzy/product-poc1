@@ -17,9 +17,11 @@ describe('VeriCommit Public Landing Page & Entry Point (Phase 2B-1)', () => {
       expect(landingSource).toContain('v1.0');
     });
 
-    it('contains the core headline connecting milestones to observable GitHub evidence', () => {
-      expect(landingSource).toContain('Connect agreed software milestones to observable GitHub evidence');
-      expect(landingSource).toContain('VeriCommit provides transparent milestone verification for software grants');
+    it('contains the approved headline and supporting copy (Phase 2B-3A)', () => {
+      expect(landingSource).toContain('Verify What Software Grantees Commit to Deliver.');
+      expect(landingSource).toContain(
+        'VeriCommit helps grantors assess software grantees’ progress against agreed commitments using observable GitHub evidence, grounded AI assistance, and an auditable review process that supports accountable human decisions.'
+      );
     });
 
     it('explains the 3 core pillars: Agree Criteria, Observable Evidence, Accountable Human Decisions', () => {

@@ -90,13 +90,11 @@ export function PublicLandingPage({
           </div>
 
           <h1 className="text-3xl sm:text-5xl font-extrabold text-[#142C3E] tracking-tight leading-tight sm:leading-tight">
-            Connect agreed software milestones to observable GitHub evidence.
+            Verify What Software Grantees Commit to Deliver.
           </h1>
 
           <p className="text-base sm:text-lg text-[#5B6673] max-w-2xl mx-auto leading-relaxed">
-            VeriCommit provides transparent milestone verification for software grants.
-            Compare verifiable repository activity against agreed acceptance criteria with
-            grounded AI assistance and an auditable process for accountable human decisions.
+            VeriCommit helps grantors assess software grantees’ progress against agreed commitments using observable GitHub evidence, grounded AI assistance, and an auditable review process that supports accountable human decisions.
           </p>
 
           {/* Primary & Secondary Call-to-Action Buttons */}
