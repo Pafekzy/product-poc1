@@ -1,4 +1,4 @@
-﻿# VeriCommit Entity Relationships
+# VeriCommit Entity Relationships
 
 **Status:** Proposed - requires team review  
 **Document type:** Domain Model / Entity Relationship Specification  
@@ -40,11 +40,13 @@ A Funding Agreement defines the agreed terms, scope, milestones, timelines, and 
 
 A defined deliverable, stage, or outcome within a Funding Agreement. It has agreed acceptance criteria and may have associated evidence, evaluations, and human decisions.
 
-### 3.5 Collaborative Grantor
+### 3.5 Collaborative Grantor *(Future Scope — Not in MVP)*
 
 A formally defined Grantor entity representing multiple organizations that have agreed to act together under one funding arrangement.
 
 For relationship purposes, the Collaborative Grantor counts as one Grantor entity. Its internal participants and responsibilities must be documented separately where applicable.
+
+*Note on MVP Scope:* Collaborative Grantor consortiums, cross-organization collaboration invitations, joint milestone voting, and quorum/veto rules are explicitly deferred as future scope. For the MVP, every Funding Agreement has exactly one responsible Grantor entity. See [Domain Rules](DOMAIN_RULES.md) and [Domain Diagrams](DOMAIN_DIAGRAMS.md) (UML F).
 
 ## 4. Relationship Cardinality
 
@@ -107,13 +109,13 @@ A later agreement must explicitly define its scope and must not silently rewrite
 </p> 
 *Figure 4. Different Grantors may fund a Grantee at different times through separate Funding Agreements, with each agreement defining its own scope.*
 
-### 5.5 Collaborative Grantor
+### 5.5 Collaborative Grantor *(Future Scope — Not in MVP)*
 
 Multiple organizations may jointly fund a Grantee under one Funding Agreement if they are formally represented as one Collaborative Grantor entity for that arrangement.
 
 The agreement has one responsible Grantor entity: the Collaborative Grantor.
 
-This does not mean that any two independent Grantors automatically become a Collaborative Grantor merely because they support the same Grantee or project.
+This does not mean that any two independent Grantors automatically become a Collaborative Grantor merely because they support the same Grantee or project. As established in [Domain Rules](DOMAIN_RULES.md), collaborative grantor workflows are deferred beyond the MVP.
 
 ![Scenario 5: Collaborative Grantor Funding Flow](../../images/scenario-05-collaborative-grantor.png)
 

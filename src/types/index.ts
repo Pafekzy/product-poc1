@@ -7,6 +7,16 @@ export type CriterionStatus =
 
 export type DecisionStatus = 'pending' | 'approved' | 'rejected' | 'changes_requested';
 
+export type MilestoneLifecycleState = 
+  | 'draft' 
+  | 'in_progress' 
+  | 'submitted_for_review' 
+  | 'approved' 
+  | 'rejected' 
+  | 'changes_requested';
+
+export type EvaluationScope = 'formal' | 'self_assessment';
+
 export type EvidenceType = 'pull_request' | 'commit' | 'release' | 'test_run' | 'document';
 
 export interface EvidenceItem {
@@ -36,6 +46,12 @@ export interface Milestone {
   repositoryUrl?: string;
   evidenceSource: 'github' | 'sample';
   targetDate?: string;
+  /**
+   * Approved domain lifecycle state.
+   * Optional in Phase 1B for backward compatibility with existing fixtures and Firestore documents
+   * prior to Phase 3 lifecycle transition enforcement.
+   */
+  lifecycleState?: MilestoneLifecycleState;
   evaluationId?: string;
   humanDecision?: HumanDecision;
   createdAt: string;
@@ -83,6 +99,11 @@ export interface EvaluationReport {
   human_review_required: boolean;
   evaluated_at: string;
   evidence_source: 'github' | 'sample';
+  /**
+   * Distinguishes formal Grantor milestone review from informal Grantee pre-submission self-assessment.
+   * Optional in Phase 1B for backward compatibility with existing saved reports.
+   */
+  evaluationScope?: EvaluationScope;
 }
 
 export interface HumanDecision {
@@ -112,4 +133,22 @@ export interface AuditLogEntry {
   milestoneId?: string;
   previousState?: string;
   newState?: string;
+}
+
+/**
+ * PROPOSED DOMAIN TYPE — APPROVED DESIGN (NOT IMPLEMENTED IN RUNTIME)
+ * Represents a single-use authorization token binding an invited Grantee
+ * email to a specific Funding Agreement. Runtime endpoints and Firestore rules
+ * are planned for a subsequent phase.
+ */
+export interface GranteeInvitation {
+  id: string;
+  agreementId: string;
+  targetEmail: string;
+  tokenHash: string;
+  status: 'pending' | 'accepted' | 'expired';
+  expiresAt: string;
+  createdAt: string;
+  acceptedAt?: string;
+  acceptedByUid?: string;
 }

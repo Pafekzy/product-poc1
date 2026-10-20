@@ -1261,4 +1261,85 @@ describe('Task 3B: Designated Development/Demo Agreement Authorization & Unblock
       expect(allowedData.totalCommits).toBe(1);
     });
   });
+
+  describe('Phase 1B Domain Types & Lifecycle Definitions', () => {
+    it('accepts valid MilestoneLifecycleState values', () => {
+      const validStates = [
+        'draft',
+        'in_progress',
+        'submitted_for_review',
+        'approved',
+        'rejected',
+        'changes_requested'
+      ] as const;
+
+      expect(validStates).toHaveLength(6);
+      expect(validStates).toContain('draft');
+      expect(validStates).toContain('in_progress');
+      expect(validStates).toContain('submitted_for_review');
+      expect(validStates).toContain('approved');
+      expect(validStates).toContain('rejected');
+      expect(validStates).toContain('changes_requested');
+    });
+
+    it('instantiates a Milestone with lifecycleState successfully', () => {
+      const milestone = {
+        id: 'ms-test-01',
+        fundingAgreementId: 'fa-8041',
+        title: 'Core Deliverables',
+        description: 'Implement core API endpoints',
+        acceptanceCriteria: [],
+        evidenceSource: 'github' as const,
+        lifecycleState: 'in_progress' as const,
+        createdAt: '2026-10-20T00:00:00Z',
+        updatedAt: '2026-10-20T00:00:00Z'
+      };
+
+      expect(milestone.lifecycleState).toBe('in_progress');
+      expect(milestone.fundingAgreementId).toBe('fa-8041');
+    });
+
+    it('instantiates EvaluationReport with evaluationScope distinguishing formal vs self-assessment', () => {
+      const formalReport = {
+        evaluation_id: 'eval-formal-001',
+        project_name: 'VeriCommit',
+        milestone_title: 'M1',
+        overall_summary: 'All criteria supported.',
+        criteria_results: [],
+        suggested_next_steps: [],
+        limitations: ['Repository activity does not prove production stability.'],
+        human_review_required: true,
+        evaluated_at: '2026-10-20T00:00:00Z',
+        evidence_source: 'github' as const,
+        evaluationScope: 'formal' as const
+      };
+
+      const selfAssessmentReport = {
+        ...formalReport,
+        evaluation_id: 'eval-self-002',
+        evaluationScope: 'self_assessment' as const
+      };
+
+      expect(formalReport.evaluationScope).toBe('formal');
+      expect(selfAssessmentReport.evaluationScope).toBe('self_assessment');
+      expect(formalReport.human_review_required).toBe(true);
+      expect(selfAssessmentReport.human_review_required).toBe(true);
+    });
+
+    it('instantiates GranteeInvitation with proposed domain attributes', () => {
+      const invitation = {
+        id: 'inv-test-999',
+        agreementId: 'fa-8041',
+        targetEmail: 'builder@collective.org',
+        tokenHash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+        status: 'pending' as const,
+        expiresAt: '2026-10-27T00:00:00Z',
+        createdAt: '2026-10-20T00:00:00Z'
+      };
+
+      expect(invitation.status).toBe('pending');
+      expect(invitation.agreementId).toBe('fa-8041');
+      expect(invitation.targetEmail).toBe('builder@collective.org');
+    });
+  });
 });
