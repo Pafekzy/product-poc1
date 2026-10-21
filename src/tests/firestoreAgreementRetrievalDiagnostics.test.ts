@@ -464,4 +464,210 @@ describe('VeriCommit — Firestore Agreement Retrieval Diagnostics (FSD-01 throu
       expect(parsed.agreements[0].userRole).toBe('Grantor');
     });
   });
+
+  describe('FSD-08: REST runQuery Outgoing Request Construction Regression', () => {
+    it('constructs exact runQuery URL, headers, and payload with UID and verified-email branches for a verified user', async () => {
+      let capturedUrl = '';
+      let capturedOptions: any = null;
+
+      const mockFetch: any = vi.fn().mockImplementation(async (url: string, options: any) => {
+        capturedUrl = url;
+        capturedOptions = options;
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => [{ readTime: '2026-10-20T20:00:00.000Z' }]
+        };
+      });
+
+      const user = {
+        uid: 'usr-verified-123',
+        email: 'Grantor.Test@Example.COM',
+        email_verified: true
+      };
+      const syntheticToken = 'header.synthetic-payload.signature';
+
+      await getAuthoritativeAgreementsForUser(user, syntheticToken, mockFetch);
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+
+      // 1. Verify URL targets configured project and named database
+      const expectedUrl = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${firebaseConfig.firestoreDatabaseId}/documents:runQuery`;
+      expect(capturedUrl).toBe(expectedUrl);
+
+      // 2. Verify HTTP method and headers
+      expect(capturedOptions.method).toBe('POST');
+      expect(capturedOptions.headers).toBeDefined();
+      expect(capturedOptions.headers['Authorization']).toBe(`Bearer ${syntheticToken}`);
+      expect(capturedOptions.headers['Content-Type']).toBe('application/json');
+      expect(capturedOptions.headers['Accept']).toBe('application/json');
+
+      // 3. Verify outgoing body structure and target collection
+      const body = JSON.parse(capturedOptions.body);
+      expect(body.structuredQuery).toBeDefined();
+      expect(body.structuredQuery.from).toEqual([{ collectionId: 'funding_agreements' }]);
+
+      // 4. Verify composite OR filter
+      const compositeFilter = body.structuredQuery.where?.compositeFilter;
+      expect(compositeFilter).toBeDefined();
+      expect(compositeFilter.op).toBe('OR');
+      expect(Array.isArray(compositeFilter.filters)).toBe(true);
+
+      const filters = compositeFilter.filters;
+      // Verified user must have 4 branches: 2 UID + 2 email
+      expect(filters).toHaveLength(4);
+
+      // Branch 1: grantorId == user.uid
+      expect(filters[0]).toEqual({
+        fieldFilter: {
+          field: { fieldPath: 'grantorId' },
+          op: 'EQUAL',
+          value: { stringValue: 'usr-verified-123' }
+        }
+      });
+
+      // Branch 2: granteeId == user.uid
+      expect(filters[1]).toEqual({
+        fieldFilter: {
+          field: { fieldPath: 'granteeId' },
+          op: 'EQUAL',
+          value: { stringValue: 'usr-verified-123' }
+        }
+      });
+
+      // Branch 3: grantorEmail == lowercased email
+      expect(filters[2]).toEqual({
+        fieldFilter: {
+          field: { fieldPath: 'grantorEmail' },
+          op: 'EQUAL',
+          value: { stringValue: 'grantor.test@example.com' }
+        }
+      });
+
+      // Branch 4: granteeEmail == lowercased email
+      expect(filters[3]).toEqual({
+        fieldFilter: {
+          field: { fieldPath: 'granteeEmail' },
+          op: 'EQUAL',
+          value: { stringValue: 'grantor.test@example.com' }
+        }
+      });
+    });
+
+    it('strictly excludes email filter branches when user is unverified, retaining only UID branches', async () => {
+      let capturedOptions: any = null;
+
+      const mockFetch: any = vi.fn().mockImplementation(async (_url: string, options: any) => {
+        capturedOptions = options;
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => [{ readTime: '2026-10-20T20:00:00.000Z' }]
+        };
+      });
+
+      const user = {
+        uid: 'usr-unverified-456',
+        email: 'unverified@example.com',
+        email_verified: false
+      };
+
+      await getAuthoritativeAgreementsForUser(user, 'synthetic.token.jwt', mockFetch);
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+
+      const body = JSON.parse(capturedOptions.body);
+      const filters = body.structuredQuery?.where?.compositeFilter?.filters;
+
+      // Unverified user MUST only have the 2 UID branches
+      expect(filters).toHaveLength(2);
+
+      expect(filters[0]).toEqual({
+        fieldFilter: {
+          field: { fieldPath: 'grantorId' },
+          op: 'EQUAL',
+          value: { stringValue: 'usr-unverified-456' }
+        }
+      });
+
+      expect(filters[1]).toEqual({
+        fieldFilter: {
+          field: { fieldPath: 'granteeId' },
+          op: 'EQUAL',
+          value: { stringValue: 'usr-unverified-456' }
+        }
+      });
+
+      // Assert no email fields are present in any filter
+      const fieldsQueried = filters.map((f: any) => f.fieldFilter?.field?.fieldPath);
+      expect(fieldsQueried).not.toContain('grantorEmail');
+      expect(fieldsQueried).not.toContain('granteeEmail');
+    });
+
+    it('excludes email filter branches when user email is absent, even if email_verified is true', async () => {
+      let capturedOptions: any = null;
+
+      const mockFetch: any = vi.fn().mockImplementation(async (_url: string, options: any) => {
+        capturedOptions = options;
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => [{ readTime: '2026-10-20T20:00:00.000Z' }]
+        };
+      });
+
+      const user = {
+        uid: 'usr-no-email-789',
+        email_verified: true
+      };
+
+      await getAuthoritativeAgreementsForUser(user, 'synthetic.token.jwt', mockFetch);
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+
+      const body = JSON.parse(capturedOptions.body);
+      const filters = body.structuredQuery?.where?.compositeFilter?.filters;
+
+      expect(filters).toHaveLength(2);
+      expect(filters[0].fieldFilter.field.fieldPath).toBe('grantorId');
+      expect(filters[1].fieldFilter.field.fieldPath).toBe('granteeId');
+    });
+
+    it('ensures synthetic tokens in error responses are redacted from diagnostics and logs during runQuery', async () => {
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const syntheticRequestToken = 'synthetic-jwt-header.synthetic-request-payload-999.synthetic-signature-xyz';
+
+      const mockFetch: any = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 403,
+        statusText: 'Forbidden',
+        text: async () => JSON.stringify({
+          error: {
+            code: 403,
+            message: `Missing or insufficient permissions for request with Bearer ${syntheticRequestToken} on target project`,
+            status: 'PERMISSION_DENIED'
+          }
+        })
+      });
+
+      const user = { uid: 'usr-secret-check', email: 'sec@example.com', email_verified: true };
+      await getAuthoritativeAgreementsForUser(user, syntheticRequestToken, mockFetch);
+
+      const diag = getLastFirestoreQueryDiagnostics();
+      expect(diag).not.toBeNull();
+      expect(diag?.status).toBe(403);
+      expect(diag?.errorMessage).not.toContain(syntheticRequestToken);
+      expect(diag?.errorMessage).toContain('[REDACTED_TOKEN]');
+
+      expect(consoleErrorSpy).toHaveBeenCalled();
+      const loggedMsg = consoleErrorSpy.mock.calls[0][0];
+      expect(loggedMsg).not.toContain(syntheticRequestToken);
+      expect(loggedMsg).toContain('[REDACTED_TOKEN]');
+    });
+  });
 });
+
