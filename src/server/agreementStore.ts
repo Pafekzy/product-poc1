@@ -34,6 +34,7 @@ export interface FirestoreQueryDiagnostics {
   errorCode?: string | number;
   errorStatus?: string;
   errorMessage?: string;
+  rawSnippet?: string;
   isException?: boolean;
   exceptionMessage?: string;
   databaseId?: string;
@@ -271,21 +272,73 @@ export async function getAuthoritativeAgreementsForUser(
         let errCode: string | number | undefined;
         let errStatus: string | undefined;
         let errMsg: string | undefined;
+        let rawSnippet: string | undefined;
 
         try {
-          const errBody = await res.json();
-          if (errBody?.error) {
-            errCode = errBody.error.code;
-            errStatus = errBody.error.status;
-            if (typeof errBody.error.message === 'string') {
-              errMsg = errBody.error.message
-                .replace(/Bearer\s+[^\s]+/gi, '[REDACTED_TOKEN]')
-                .replace(/ey[A-Za-z0-9_.-]{16,}/g, '[REDACTED_JWT]')
-                .slice(0, 300);
+          let rawText = '';
+          let parsedBody: any = null;
+
+          if (typeof res.text === 'function') {
+            try {
+              rawText = await res.text();
+              if (rawText && rawText.trim().length > 0) {
+                try {
+                  parsedBody = JSON.parse(rawText);
+                } catch {
+                  // Not valid JSON (e.g. HTML or plain text)
+                }
+              }
+            } catch {
+              // Failed reading text stream
             }
           }
+
+          if (!parsedBody && !rawText && typeof res.json === 'function') {
+            try {
+              parsedBody = await res.json();
+              rawText = typeof parsedBody === 'string' ? parsedBody : JSON.stringify(parsedBody);
+            } catch {
+              // Failed reading json stream
+            }
+          }
+
+          // Sanitize raw text to avoid leaking credentials/tokens
+          const sanitizedRaw = (rawText || '')
+            .replace(/Bearer\s+[^\s]+/gi, '[REDACTED_TOKEN]')
+            .replace(/ey[A-Za-z0-9_.-]{16,}/g, '[REDACTED_JWT]')
+            .replace(/AIza[0-9A-Za-z-_]{35}/g, '[REDACTED_KEY]')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+          if (sanitizedRaw) {
+            rawSnippet = sanitizedRaw.slice(0, 300);
+          }
+
+          if (parsedBody) {
+            // Firestore runQuery can return an array of response items: [{ error: ... }]
+            const target = Array.isArray(parsedBody)
+              ? (parsedBody[0]?.error || parsedBody[0])
+              : (parsedBody?.error || parsedBody);
+
+            if (target && typeof target === 'object') {
+              errCode = target.code;
+              errStatus = target.status;
+              if (typeof target.message === 'string') {
+                errMsg = target.message
+                  .replace(/Bearer\s+[^\s]+/gi, '[REDACTED_TOKEN]')
+                  .replace(/ey[A-Za-z0-9_.-]{16,}/g, '[REDACTED_JWT]')
+                  .replace(/AIza[0-9A-Za-z-_]{35}/g, '[REDACTED_KEY]')
+                  .slice(0, 300);
+              }
+            }
+          }
+
+          // If structured error message was absent, fall back to sanitized raw text snippet
+          if (!errMsg && rawSnippet) {
+            errMsg = rawSnippet;
+          }
         } catch {
-          // Response body was not JSON or already consumed
+          // Stream read failure
         }
 
         const diagnostics: FirestoreQueryDiagnostics = {
@@ -294,6 +347,7 @@ export async function getAuthoritativeAgreementsForUser(
           errorCode: errCode,
           errorStatus: errStatus,
           errorMessage: errMsg,
+          rawSnippet,
           projectId,
           databaseId,
           timestamp: new Date().toISOString()
@@ -302,7 +356,7 @@ export async function getAuthoritativeAgreementsForUser(
         lastFirestoreQueryDiagnostics = diagnostics;
 
         console.error(
-          `[FirestoreDiagnostics] runQuery failed: HTTP ${res.status} ${res.statusText || ''} | status=${errStatus || 'UNKNOWN'} | code=${errCode || 'UNKNOWN'} | message=${errMsg || 'None'}`
+          `[FirestoreDiagnostics] runQuery failed: HTTP ${res.status} ${res.statusText || ''} | status=${errStatus || 'UNKNOWN'} | code=${errCode || 'UNKNOWN'} | message=${errMsg || rawSnippet || 'None'}`
         );
 
         return null;

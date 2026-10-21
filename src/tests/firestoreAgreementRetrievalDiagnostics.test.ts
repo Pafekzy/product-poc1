@@ -147,6 +147,7 @@ describe('VeriCommit — Firestore Agreement Retrieval Diagnostics (FSD-01 throu
 
       const diag = getLastFirestoreQueryDiagnostics();
       expect(diag?.isException).toBe(true);
+      expect(diag?.isException).toBe(true);
       expect(diag?.exceptionMessage).not.toContain('eyJhbGciOiJSUzI1NiJ9.secret');
       expect(diag?.exceptionMessage).toContain('[REDACTED_JWT]');
 
@@ -154,6 +155,156 @@ describe('VeriCommit — Firestore Agreement Retrieval Diagnostics (FSD-01 throu
       const loggedMsg = consoleErrorSpy.mock.calls[0][0];
       expect(loggedMsg).toContain('[FirestoreDiagnostics] runQuery exception:');
       expect(loggedMsg).not.toContain('eyJhbGciOiJSUzI1NiJ9.secret');
+    });
+
+    it('FSD3: parses Firestore runQuery array error responses correctly ([{ error: ... }])', async () => {
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const mockFetch: any = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 403,
+        statusText: 'Forbidden',
+        text: async () => JSON.stringify([
+          {
+            error: {
+              code: 403,
+              message: 'Missing or insufficient permissions.',
+              status: 'PERMISSION_DENIED'
+            }
+          }
+        ])
+      });
+
+      const user = { uid: 'user-diagnostics-array', email: 'test@example.com', email_verified: true };
+      const result = await getAuthoritativeAgreementsForUser(user, 'header.payload.signature', mockFetch);
+      expect(result).toBeNull();
+
+      const diag = getLastFirestoreQueryDiagnostics();
+      expect(diag?.status).toBe(403);
+      expect(diag?.statusText).toBe('Forbidden');
+      expect(diag?.errorStatus).toBe('PERMISSION_DENIED');
+      expect(diag?.errorCode).toBe(403);
+      expect(diag?.errorMessage).toBe('Missing or insufficient permissions.');
+
+      expect(consoleErrorSpy).toHaveBeenCalled();
+      const loggedMsg = consoleErrorSpy.mock.calls[0][0];
+      expect(loggedMsg).toContain('[FirestoreDiagnostics] runQuery failed: HTTP 403 Forbidden | status=PERMISSION_DENIED | code=403 | message=Missing or insufficient permissions.');
+    });
+
+    it('FSD3: handles non-JSON HTML error responses safely without losing HTTP status or crashing', async () => {
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const htmlBody = '<html><head><title>403 Forbidden</title></head><body><h1>Forbidden</h1><p>Access Denied by Edge Proxy</p></body></html>';
+      const mockFetch: any = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 403,
+        statusText: 'Forbidden',
+        text: async () => htmlBody
+      });
+
+      const user = { uid: 'user-diagnostics-html', email: 'test@example.com', email_verified: true };
+      const result = await getAuthoritativeAgreementsForUser(user, 'header.payload.signature', mockFetch);
+      expect(result).toBeNull();
+
+      const diag = getLastFirestoreQueryDiagnostics();
+      expect(diag?.status).toBe(403);
+      expect(diag?.statusText).toBe('Forbidden');
+      expect(diag?.errorStatus).toBeUndefined();
+      expect(diag?.errorCode).toBeUndefined();
+      expect(diag?.errorMessage).toContain('Forbidden');
+      expect(diag?.rawSnippet).toContain('Access Denied by Edge Proxy');
+
+      expect(consoleErrorSpy).toHaveBeenCalled();
+      const loggedMsg = consoleErrorSpy.mock.calls[0][0];
+      expect(loggedMsg).toContain('[FirestoreDiagnostics] runQuery failed: HTTP 403 Forbidden | status=UNKNOWN | code=UNKNOWN');
+      expect(loggedMsg).toContain('Forbidden');
+      expect(loggedMsg).not.toContain('message=None'); // Ensures actual snippet is exposed, not 'None'
+    });
+
+    it('FSD3: handles malformed JSON error responses safely', async () => {
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const brokenJson = '{"error": {"code": 403, "message": "Incomplete payload';
+      const mockFetch: any = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 403,
+        statusText: 'Forbidden',
+        text: async () => brokenJson
+      });
+
+      const user = { uid: 'user-diagnostics-malformed', email: 'test@example.com', email_verified: true };
+      const result = await getAuthoritativeAgreementsForUser(user, 'header.payload.signature', mockFetch);
+      expect(result).toBeNull();
+
+      const diag = getLastFirestoreQueryDiagnostics();
+      expect(diag?.status).toBe(403);
+      expect(diag?.rawSnippet).toBe('{"error": {"code": 403, "message": "Incomplete payload');
+      expect(diag?.errorMessage).toBe('{"error": {"code": 403, "message": "Incomplete payload');
+
+      expect(consoleErrorSpy).toHaveBeenCalled();
+      const loggedMsg = consoleErrorSpy.mock.calls[0][0];
+      expect(loggedMsg).toContain('[FirestoreDiagnostics] runQuery failed: HTTP 403 Forbidden | status=UNKNOWN | code=UNKNOWN');
+    });
+
+    it('FSD3: redacts API keys and tokens in both structured messages and raw snippets', async () => {
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const sensitiveText = 'Error for key AIzaSyBtPNNqFInIg2NucNQVnaUPO-BkMaLzp5o with token Bearer secret-auth-token-12345';
+      const mockFetch: any = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 403,
+        statusText: 'Forbidden',
+        text: async () => JSON.stringify({
+          error: {
+            code: 403,
+            status: 'PERMISSION_DENIED',
+            message: sensitiveText
+          }
+        })
+      });
+
+      const user = { uid: 'user-diagnostics-redact', email: 'test@example.com', email_verified: true };
+      await getAuthoritativeAgreementsForUser(user, 'header.payload.signature', mockFetch);
+
+      const diag = getLastFirestoreQueryDiagnostics();
+      expect(diag?.errorMessage).not.toContain('AIzaSyBtPNNqFInIg2NucNQVnaUPO-BkMaLzp5o');
+      expect(diag?.errorMessage).not.toContain('secret-auth-token-12345');
+      expect(diag?.errorMessage).toContain('[REDACTED_KEY]');
+      expect(diag?.errorMessage).toContain('[REDACTED_TOKEN]');
+
+      expect(diag?.rawSnippet).not.toContain('AIzaSyBtPNNqFInIg2NucNQVnaUPO-BkMaLzp5o');
+      expect(diag?.rawSnippet).not.toContain('secret-auth-token-12345');
+      expect(diag?.rawSnippet).toContain('[REDACTED_KEY]');
+      expect(diag?.rawSnippet).toContain('[REDACTED_TOKEN]');
+
+      const loggedMsg = consoleErrorSpy.mock.calls[0][0];
+      expect(loggedMsg).not.toContain('AIzaSyBtPNNqFInIg2NucNQVnaUPO-BkMaLzp5o');
+      expect(loggedMsg).not.toContain('secret-auth-token-12345');
+    });
+
+    it('FSD3: handles empty response bodies safely preserving HTTP status and statusText', async () => {
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const mockFetch: any = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 403,
+        statusText: 'Forbidden',
+        text: async () => ''
+      });
+
+      const user = { uid: 'user-diagnostics-empty', email: 'test@example.com', email_verified: true };
+      const result = await getAuthoritativeAgreementsForUser(user, 'header.payload.signature', mockFetch);
+      expect(result).toBeNull();
+
+      const diag = getLastFirestoreQueryDiagnostics();
+      expect(diag?.status).toBe(403);
+      expect(diag?.statusText).toBe('Forbidden');
+      expect(diag?.errorMessage).toBeUndefined();
+      expect(diag?.rawSnippet).toBeUndefined();
+
+      expect(consoleErrorSpy).toHaveBeenCalled();
+      const loggedMsg = consoleErrorSpy.mock.calls[0][0];
+      expect(loggedMsg).toContain('[FirestoreDiagnostics] runQuery failed: HTTP 403 Forbidden | status=UNKNOWN | code=UNKNOWN | message=None');
     });
   });
 
