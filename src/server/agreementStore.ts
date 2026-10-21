@@ -28,6 +28,29 @@ export function clearAuthoritativeRegistry(): void {
   authoritativeRegistry.clear();
 }
 
+export interface FirestoreQueryDiagnostics {
+  status?: number;
+  statusText?: string;
+  errorCode?: string | number;
+  errorStatus?: string;
+  errorMessage?: string;
+  isException?: boolean;
+  exceptionMessage?: string;
+  databaseId?: string;
+  projectId?: string;
+  timestamp: string;
+}
+
+let lastFirestoreQueryDiagnostics: FirestoreQueryDiagnostics | null = null;
+
+export function getLastFirestoreQueryDiagnostics(): FirestoreQueryDiagnostics | null {
+  return lastFirestoreQueryDiagnostics;
+}
+
+export function clearFirestoreQueryDiagnostics(): void {
+  lastFirestoreQueryDiagnostics = null;
+}
+
 /**
  * Resolves a FundingAgreement authoritatively:
  * 1. If an idToken is provided, queries the Cloud Firestore REST API using the caller's verified Bearer token.
@@ -245,6 +268,43 @@ export async function getAuthoritativeAgreementsForUser(
       });
 
       if (!res.ok) {
+        let errCode: string | number | undefined;
+        let errStatus: string | undefined;
+        let errMsg: string | undefined;
+
+        try {
+          const errBody = await res.json();
+          if (errBody?.error) {
+            errCode = errBody.error.code;
+            errStatus = errBody.error.status;
+            if (typeof errBody.error.message === 'string') {
+              errMsg = errBody.error.message
+                .replace(/Bearer\s+[^\s]+/gi, '[REDACTED_TOKEN]')
+                .replace(/ey[A-Za-z0-9_.-]{16,}/g, '[REDACTED_JWT]')
+                .slice(0, 300);
+            }
+          }
+        } catch {
+          // Response body was not JSON or already consumed
+        }
+
+        const diagnostics: FirestoreQueryDiagnostics = {
+          status: res.status,
+          statusText: res.statusText,
+          errorCode: errCode,
+          errorStatus: errStatus,
+          errorMessage: errMsg,
+          projectId,
+          databaseId,
+          timestamp: new Date().toISOString()
+        };
+
+        lastFirestoreQueryDiagnostics = diagnostics;
+
+        console.error(
+          `[FirestoreDiagnostics] runQuery failed: HTTP ${res.status} ${res.statusText || ''} | status=${errStatus || 'UNKNOWN'} | code=${errCode || 'UNKNOWN'} | message=${errMsg || 'None'}`
+        );
+
         return null;
       }
 
@@ -287,8 +347,26 @@ export async function getAuthoritativeAgreementsForUser(
 
       // Return results directly (including empty array) when authoritative query succeeds
       return results;
-    } catch {
-      // Failed to execute live query
+    } catch (err: any) {
+      const exceptionMsg = err instanceof Error ? err.message : String(err);
+      const sanitizedMsg = (exceptionMsg || '')
+        .replace(/Bearer\s+[^\s]+/gi, '[REDACTED_TOKEN]')
+        .replace(/ey[A-Za-z0-9_.-]{16,}/g, '[REDACTED_JWT]')
+        .slice(0, 300);
+
+      const diagnostics: FirestoreQueryDiagnostics = {
+        isException: true,
+        exceptionMessage: sanitizedMsg,
+        timestamp: new Date().toISOString()
+      };
+
+      lastFirestoreQueryDiagnostics = diagnostics;
+
+      console.error(
+        `[FirestoreDiagnostics] runQuery exception: ${sanitizedMsg}`
+      );
+
+      return null;
     }
   }
 
