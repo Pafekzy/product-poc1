@@ -23,6 +23,7 @@ import {
 import { FeatureCarousel } from './components/FeatureCarousel';
 import { WorkspaceHeader } from './components/workspace/WorkspaceHeader';
 import { AgreementContextBar } from './components/workspace/AgreementContextBar';
+import { GrantorWorkspace } from './components/grantor/GrantorWorkspace';
 import { PublicLandingPage } from './components/public/PublicLandingPage';
 import { EmptyWorkspaceView } from './components/common/EmptyWorkspaceView';
 import { AgreementErrorView } from './components/common/AgreementErrorView';
@@ -861,14 +862,24 @@ export default function App() {
         {/* Navigation Tabs - 6 Principal Screens with Smooth Horizontal Scroll */}
         <nav ref={navScrollRef} className="bg-[#0D2130] px-2 sm:px-6 lg:px-8 border-t border-[#1C3A50] overflow-x-auto no-scrollbar touch-pan-x scroll-smooth">
           <div className="max-w-7xl mx-auto flex space-x-1 min-w-max py-0.5">
-            {[
-              { id: 'dashboard', label: 'Workspace Dashboard', icon: ShieldCheck },
-              { id: 'milestone-details', label: 'Milestone Details', icon: FolderGit2 },
-              { id: 'evidence-explorer', label: 'Evidence Explorer', icon: GitPullRequest },
-              { id: 'verification-report', label: 'Verification Report', icon: FileCheck2 },
-              { id: 'human-review', label: 'Human Review', icon: UserCheck },
-              { id: 'audit-history', label: 'Audit History', icon: History }
-            ].map(tab => {
+            {(userRole === 'Grantor'
+              ? [
+                  { id: 'dashboard', label: 'Grant Oversight', icon: ShieldCheck },
+                  { id: 'milestone-details', label: 'Milestone Scope', icon: FolderGit2 },
+                  { id: 'evidence-explorer', label: 'Evidence Explorer', icon: GitPullRequest },
+                  { id: 'verification-report', label: 'AI Assessment', icon: FileCheck2 },
+                  { id: 'human-review', label: 'Formal Decision', icon: UserCheck },
+                  { id: 'audit-history', label: 'Audit Trail', icon: History }
+                ]
+              : [
+                  { id: 'dashboard', label: 'Workspace Dashboard', icon: ShieldCheck },
+                  { id: 'milestone-details', label: 'Milestone Details', icon: FolderGit2 },
+                  { id: 'evidence-explorer', label: 'Evidence Explorer', icon: GitPullRequest },
+                  { id: 'verification-report', label: 'Verification Report', icon: FileCheck2 },
+                  { id: 'human-review', label: 'Human Review', icon: UserCheck },
+                  { id: 'audit-history', label: 'Audit History', icon: History }
+                ]
+            ).map(tab => {
               const Icon = tab.icon;
               const isActive = activeTab === tab.id;
               return (
@@ -906,8 +917,43 @@ export default function App() {
           isLoading={agreementsLoading}
         />
 
-        {/* Banner Alert on non-dashboard tabs if Human Review is Pending */}
-        {activeTab !== 'dashboard' && activeTab !== 'human-review' && currentMilestone && !currentMilestone.humanDecision && currentMilestone.evaluationId && (
+        {userRole === 'Grantor' ? (
+          <GrantorWorkspace
+            currentAgreement={currentAgreement}
+            selectedMilestoneId={selectedMilestoneId}
+            onSelectMilestone={setSelectedMilestoneId}
+            activeTab={activeTab as any}
+            onSelectTab={setActiveTab as any}
+            evaluations={evaluations}
+            auditLogs={auditLogs}
+            currentUser={currentUser}
+            isEvaluating={isEvaluating}
+            evaluatingMilestoneId={evaluatingMilestoneId}
+            evalStage={evalStage}
+            evalNotice={evalNotice}
+            onRunEvaluation={handleRunEvaluation}
+            reviewerName={reviewerName}
+            onReviewerNameChange={setReviewerName}
+            decisionChoice={decisionChoice}
+            onDecisionChoiceChange={setDecisionChoice}
+            decisionReasoning={decisionReasoning}
+            onDecisionReasoningChange={setDecisionReasoning}
+            decisionFeedback={decisionFeedback}
+            onDismissDecisionFeedback={() => setDecisionFeedback(null)}
+            isSubmittingDecision={isSubmittingDecision}
+            onSubmitDecision={handleRecordDecision}
+            evidenceViewMode={evidenceViewMode}
+            onEvidenceViewModeChange={setEvidenceViewMode}
+            liveEvidence={liveEvidence}
+            isFetchingEvidence={isFetchingEvidence}
+            onFetchLiveEvidence={handleFetchLiveEvidence}
+            evidenceNotice={evidenceNotice}
+            onOpenNewMilestoneModal={() => setShowNewMilestoneModal(true)}
+          />
+        ) : (
+          <>
+            {/* Banner Alert on non-dashboard tabs if Human Review is Pending */}
+            {activeTab !== 'dashboard' && activeTab !== 'human-review' && currentMilestone && !currentMilestone.humanDecision && currentMilestone.evaluationId && (
           <div className="mb-4 sm:mb-6 p-3.5 sm:p-4 bg-[#FFF1D6] border border-[#F2D696] rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
             <div className="flex items-start gap-2.5 min-w-0">
               <Info className="w-5 h-5 text-[#8C5E00] shrink-0 mt-0.5" />
@@ -1932,7 +1978,7 @@ export default function App() {
                     <div className="w-full text-xs sm:text-sm px-3 py-2.5 rounded-lg border border-[#DCE3E9] bg-[#F5F7F9] flex items-center gap-2 min-h-[44px]">
                       <UserCheck className="w-4 h-4 text-[#167D72] shrink-0" />
                       <span className="font-semibold text-[#142C3E]">
-                        {userRole === 'Grantor'
+                        {(userRole as string) === 'Grantor'
                           ? 'Grantor (Authorized Signer)'
                           : userRole === 'Grantee'
                           ? 'Grantee (Unauthorized for Signatures)'
@@ -2051,6 +2097,8 @@ export default function App() {
               </div>
             </div>
           </div>
+        )}
+          </>
         )}
       </main>
 
