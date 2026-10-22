@@ -24,7 +24,7 @@ jobs:
           node-version: 22
 
       - name: Install test tools
-        run: npm install --no-save firebase @firebase/rules-unit-testing@6.0.0 firebase-tools
+        run: npm install --no-save --legacy-peer-deps firebase @firebase/rules-unit-testing@6.0.0 firebase-tools
 
       - name: Run Firestore security regression tests
         run: npx firebase emulators:exec --project demo-vericommit-rules --only firestore "node scripts/firestore-security-regression.cjs"
