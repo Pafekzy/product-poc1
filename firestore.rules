@@ -59,11 +59,21 @@ service cloud.firestore {
 
     // Funding Agreements: Restricted strictly to participants (Grantor and Grantee)
     match /funding_agreements/{agreementId} {
-      allow read: if isSignedIn() && isValidId(agreementId) && (
-        request.auth.uid == resource.data.grantorId ||
-        request.auth.uid == resource.data.granteeId ||
-        (isEmailVerified() && resource.data.grantorEmail != null && request.auth.token.email != null && request.auth.token.email.lower() == resource.data.grantorEmail.lower()) ||
-        (isEmailVerified() && resource.data.granteeEmail != null && request.auth.token.email != null && request.auth.token.email.lower() == resource.data.granteeEmail.lower())
+      // Reads must remain query-compatible: validate participant fields, not the document ID.
+      // Missing optional email fields must evaluate as non-matches rather than rule errors.
+      allow read: if isSignedIn() && (
+        ('grantorId' in resource.data && resource.data.grantorId == request.auth.uid) ||
+        ('granteeId' in resource.data && resource.data.granteeId == request.auth.uid) ||
+        (isEmailVerified() &&
+          'grantorEmail' in resource.data &&
+          resource.data.grantorEmail is string &&
+          request.auth.token.email is string &&
+          request.auth.token.email.lower() == resource.data.grantorEmail.lower()) ||
+        (isEmailVerified() &&
+          'granteeEmail' in resource.data &&
+          resource.data.granteeEmail is string &&
+          request.auth.token.email is string &&
+          request.auth.token.email.lower() == resource.data.granteeEmail.lower())
       );
 
       allow create: if isSignedIn() && isValidId(agreementId)
